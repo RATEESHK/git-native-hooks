@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Git Hook: commit-msg
+# ==============================================================================
+# Validates commit messages against required format before commit is created.
+#
+# Required Format:
+# - <type>: <JIRA-ID> <description>
+# - Types: feat, fix, chore, break, tests
+# - JIRA-ID: 2-10 uppercase letters, dash, numbers (e.g., PROJ-123)
+#
+# Special Cases:
+# - Merge commits: Allowed (start with "Merge")
+# - Revert commits: Allowed (start with "Revert")
+#
+# Environment Variables:
+# - BYPASS_HOOKS=1: Skip validation
+#
+# Author: Enterprise Development Team
+# ==============================================================================
+
+set -euo pipefail
+
+# Source common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+readonly HOOK_NAME="commit-msg"
+
+# ==============================================================================
+# MAIN HOOK LOGIC
+# ==============================================================================
+
+main() {
+    local commit_msg_file="$1"
+    
+    log_to_file "INFO" "$HOOK_NAME" "Hook execution started"
+    
+    # Check for global bypass
+    if should_bypass_hooks; then
+        log_bypass "$HOOK_NAME" "Hook bypassed via BYPASS_HOOKS"
+        exit 0
+    fi
+    
+    # Read commit message (first line only)
+    local commit_msg
+    commit_msg=$(head -n 1 "$commit_msg_file" | tr -d '\n')
+    
+    # Skip empty messages
+    if [[ -z "$commit_msg" ]] || [[ "$commit_msg" =~ ^#.*$ ]]; then
+        log_to_file "ERROR" "$HOOK_NAME" "Empty commit message"
+        
+        local error_details="Commit message cannot be empty."
+        local suggestions=()
+        suggestions+=("A meaningful commit message is required.")
+        suggestions+=("")
+        suggestions+=("Try again with:")
+        suggestions+=("  git commit -m \"<type>: <JIRA-ID> <description>\"")
+        
+        report_error "$HOOK_NAME" "Empty Commit Message" "$error_details" "${suggestions[@]}"
+        exit 1
+    fi
+    
+    log_to_file "INFO" "$HOOK_NAME" "Validating message: $commit_msg"
+    
+    # Validate commit message format
+    if validate_commit_message "$commit_msg"; then
+        log_to_file "INFO" "$HOOK_NAME" "Commit message valid: $commit_msg"
+        exit 0
+    fi
+    
+    # Message is invalid - provide detailed guidance
+    local current_branch
+    current_branch=$(get_current_branch)
+    
+    local jira_id
+    local has_jira=false
+    if jira_id=$(extract_jira_id "$current_branch"); then
+        has_jira=true
+    else
+        jira_id="PROJ-123"
+    fi
+    
+    local error_details="Commit message must follow: <type>: <JIRA-ID> <description>"
+    local suggestions=()
+    
+    suggestions+=("Your message: \"$commit_msg\"")
+    suggestions+=("")
+    
+    if [[ "$has_jira" == "true" ]]; then
+        suggestions+=("✓ JIRA ID from branch: $jira_id")
+        suggestions+=("")
+        suggestions+=("Required format: feat: $jira_id add your description")
+    else
+        suggestions+=("⚠ No JIRA ID in branch name '$current_branch'")
+        suggestions+=("")
+        suggestions+=("Required format: feat: PROJ-123 add your description")
+        suggestions+=("(Replace PROJ-123 with your actual JIRA ticket)")
+    fi
+    
+    suggestions+=("Types: feat, fix, chore, break, tests, docs, refactor, perf")
+    suggestions+=("")
+    suggestions+=("Examples:")
+    suggestions+=("  feat: $jira_id add user authentication")
+    suggestions+=("  fix: $jira_id resolve memory leak")
+    suggestions+=("  chore: $jira_id update dependencies")
+    suggestions+=("")
+    
+    if [[ "$has_jira" == "true" ]]; then
+        suggestions+=("Fix now:")
+        suggestions+=("  git commit --amend -m \"feat: $jira_id your description\"")
+    else
+        suggestions+=("Fix now (replace PROJ-123 with your JIRA ticket):")
+        suggestions+=("  git commit --amend -m \"feat: PROJ-123 your description\"")
+    fi
+    
+    suggestions+=("")
+    suggestions+=("🔄 Undo commit if needed:")
+    suggestions+=("  git reset --soft HEAD~1      # Undo commit, keep changes")
+    suggestions+=("  git reset --mixed HEAD~1     # Undo commit, unstage changes")
+    suggestions+=("  git reset --hard HEAD~1      # Undo commit, discard changes")
+    suggestions+=("  git reflog                   # View commit history to recover")
+    
+    report_error "$HOOK_NAME" "Invalid Commit Message" "$error_details" "${suggestions[@]}"
+    exit 1
+}
+
+# Execute main function
+main "$@"

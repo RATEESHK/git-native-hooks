@@ -1,0 +1,613 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Git Hook: pre-push
+# ==============================================================================
+# Enforces branch naming conventions, curated history, and Git Flow rules
+# before pushing to remote repositories.
+#
+# Validations:
+# - Branch naming patterns (Git Flow compliant)
+# - Commit count limits (configurable, default: 5)
+# - Linear history (no merge commits)
+# - Branch origin validation (e.g., features from develop)
+# - Foxtrot merge detection
+#
+# Environment Variables:
+# - BYPASS_HOOKS=1: Skip all hook validations
+# - ALLOW_DIRECT_PROTECTED=1: Allow pushing to protected branches
+#
+# Configuration:
+# - hooks.maxCommits: Maximum commits allowed (default: 5)
+#
+# Author: Enterprise Development Team
+# ==============================================================================
+
+set -euo pipefail
+
+# Source common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+readonly HOOK_NAME="pre-push"
+
+# ==============================================================================
+# VALIDATION FUNCTIONS
+# ==============================================================================
+
+# Validate branch name and provide context-aware guidance
+validate_branch_naming() {
+    local branch="$1"
+    local current_state="$2"
+    
+    log_to_file "INFO" "$HOOK_NAME" "Validating branch name: $branch"
+    
+    if validate_branch_name "$branch"; then
+        return 0
+    fi
+    
+    # Branch name is invalid - provide context-aware error
+    local branch_type
+    branch_type="$(get_branch_type "$branch")"
+    
+    local error_details="Branch '$branch' doesn't follow Git Flow naming: <type>-<JIRA>-<description>"
+    local suggestions=()
+    
+    # Extract potential JIRA ID if present
+    local jira_id="PROJ-123"
+    local has_jira=false
+    if jira_id=$(extract_jira_id "$branch"); then
+        has_jira=true
+        suggestions+=("✓ Detected JIRA: $jira_id")
+    else
+        suggestions+=("⚠ No JIRA ID detected in branch name")
+    fi
+    
+    # Determine base branch
+    local suggested_base="develop"
+    local current_base
+    current_base=$(get_base_branch "$branch")
+    if [[ -n "$current_base" ]]; then
+        suggested_base="$current_base"
+    fi
+    
+    suggestions+=("")
+    
+    if [[ "$has_jira" == "true" ]]; then
+        suggestions+=("Valid format: feat-${jira_id}-your-description")
+        suggestions+=("Examples: feat-${jira_id}-add-auth | fix-${jira_id}-memory-leak | hotfix-${jira_id}-security-fix")
+    else
+        suggestions+=("Valid format: feat-PROJ-123-your-description")
+        suggestions+=("Examples: feat-PROJ-123-add-auth | fix-PROJ-123-memory-leak | hotfix-PROJ-123-security-fix")
+        suggestions+=("(Replace PROJ-123 with your actual JIRA ticket)")
+    fi
+    
+    suggestions+=("")
+    suggestions+=("Option 1 - Create new branch (recommended, cleaner):")
+    suggestions+=("  git checkout $suggested_base")
+    
+    if [[ "$has_jira" == "true" ]]; then
+        suggestions+=("  git checkout -b feat-${jira_id}-your-description")
+    else
+        suggestions+=("  git checkout -b feat-PROJ-123-your-description  # Use your actual JIRA ID")
+    fi
+    
+    suggestions+=("  git cherry-pick <commit1> <commit2>  # Move your commits")
+    
+    if [[ "$has_jira" == "true" ]]; then
+        suggestions+=("  git push origin -u feat-${jira_id}-your-description")
+    else
+        suggestions+=("  git push origin -u feat-PROJ-123-your-description")
+    fi
+    
+    suggestions+=("  git branch -D $branch  # Delete old branch")
+    suggestions+=("  git push origin --delete $branch  # Delete from remote")
+    suggestions+=("")
+    suggestions+=("Option 2 - Rename existing (if no commits yet):")
+    
+    if [[ "$has_jira" == "true" ]]; then
+        suggestions+=("  git branch -m $branch feat-${jira_id}-your-description")
+        suggestions+=("  git push origin -u feat-${jira_id}-your-description")
+    else
+        suggestions+=("  git branch -m $branch feat-PROJ-123-your-description  # Use your actual JIRA ID")
+        suggestions+=("  git push origin -u feat-PROJ-123-your-description")
+    fi
+    
+    suggestions+=("")
+    suggestions+=("🔄 Undo if you created new branch (Option 1):")
+    suggestions+=("  # You're currently on: $branch (wrong name)")
+    suggestions+=("  # If you created new branch and want to undo:")
+    suggestions+=("  git checkout $suggested_base  # Go back to base branch")
+    
+    if [[ "$has_jira" == "true" ]]; then
+        suggestions+=("  git branch -D feat-${jira_id}-your-description  # Delete new branch")
+    else
+        suggestions+=("  git branch -D feat-PROJ-123-your-description  # Delete new branch")
+    fi
+    
+    suggestions+=("  # Note: Your original branch '$branch' still exists")
+    suggestions+=("")
+    suggestions+=("🔄 Undo if you renamed branch (Option 2):")
+    
+    if [[ "$has_jira" == "true" ]]; then
+        suggestions+=("  git branch -m feat-${jira_id}-your-description $branch  # Rename back")
+    else
+        suggestions+=("  git branch -m feat-PROJ-123-your-description $branch  # Rename back")
+    fi
+    
+    report_error "$HOOK_NAME" "Invalid Branch Name" "$error_details" "${suggestions[@]}"
+    return 1
+}
+
+# Validate branch was created from correct base (Git Flow)
+validate_branch_base() {
+    local branch="$1"
+    local base_branch="$2"
+    
+    log_to_file "INFO" "$HOOK_NAME" "Validating branch base: $branch from $base_branch"
+    
+    local branch_type
+    branch_type="$(get_branch_type "$branch")"
+    
+    # Skip validation for long-lived branches
+    if [[ "$branch_type" == "main" ]] || [[ "$branch_type" == "develop" ]] || [[ "$branch_type" == "release" ]]; then
+        return 0
+    fi
+    
+    # Check if base branch is set
+    if [[ -z "$base_branch" ]]; then
+        local allowed_bases
+        allowed_bases="$(get_allowed_bases "$branch")"
+        
+        local error_details="Branch '$branch' does not have a configured base branch."
+        local suggestions=()
+        
+        suggestions+=("Git Flow requires branches to be created from specific base branches:")
+        suggestions+=("")
+        suggestions+=("Your branch type: $branch_type")
+        suggestions+=("Allowed base branch(es): $allowed_bases")
+        suggestions+=("")
+        suggestions+=("Option 1 - Recreate from correct base (recommended):")
+        suggestions+=("  git checkout $allowed_bases")
+        suggestions+=("  git checkout -b ${branch}-new")
+        suggestions+=("  git cherry-pick <your-commits>  # Apply your changes")
+        suggestions+=("  git branch -D $branch  # Delete old branch")
+        suggestions+=("")
+        suggestions+=("Option 2 - Set base config (quick fix if already correct):")
+        suggestions+=("  git config branch.$branch.base $allowed_bases")
+        
+        report_error "$HOOK_NAME" "Missing Base Branch Configuration" "$error_details" "${suggestions[@]}"
+        return 1
+    fi
+    
+    # Validate base is correct for branch type
+    if ! validate_branch_origin "$branch" "$base_branch"; then
+        local allowed_bases
+        allowed_bases="$(get_allowed_bases "$branch")"
+        
+        local error_details="Branch '$branch' has incorrect base branch '$base_branch'."
+        local suggestions=()
+        
+        suggestions+=("Git Flow violation detected:")
+        suggestions+=("")
+        suggestions+=("Current base: $base_branch")
+        suggestions+=("Expected base: $allowed_bases")
+        suggestions+=("Branch type: $branch_type")
+        suggestions+=("")
+        suggestions+=("Git Flow rules:")
+        case "$branch_type" in
+            feature|bugfix|support)
+                suggestions+=("  - Feature branches MUST be created from 'develop'")
+                suggestions+=("  - This ensures features target the next release")
+                ;;
+            release)
+                suggestions+=("  - Release branches MUST be created from 'develop'")
+                suggestions+=("  - This captures all features ready for release")
+                ;;
+            hotfix)
+                suggestions+=("  - Hotfix branches MUST be created from 'main'")
+                suggestions+=("  - This fixes production issues immediately")
+                ;;
+        esac
+        suggestions+=("")
+        suggestions+=("To fix this issue:")
+        suggestions+=("  1. Backup your work:")
+        suggestions+=("     git checkout $branch")
+        suggestions+=("     git format-patch $base_branch..HEAD -o /tmp/patches")
+        suggestions+=("")
+        suggestions+=("  2. Create new branch from correct base:")
+        suggestions+=("     git checkout $allowed_bases")
+        suggestions+=("     git pull origin $allowed_bases")
+        suggestions+=("     git checkout -b ${branch}-new")
+        suggestions+=("")
+        suggestions+=("  3. Apply your changes:")
+        suggestions+=("     git am /tmp/patches/*")
+        suggestions+=("")
+        suggestions+=("  4. Clean up old branch:")
+        suggestions+=("     git branch -D $branch  # Delete old branch")
+        suggestions+=("     git push origin --delete $branch  # If already pushed")
+        
+        report_error "$HOOK_NAME" "Invalid Branch Base" "$error_details" "${suggestions[@]}"
+        return 1
+    fi
+    
+    # Validate actual branch creation source using stored git config
+    # Post-checkout hook stores where the branch was created from
+    if git rev-parse --verify "$base_branch" >/dev/null 2>&1; then
+        local created_from
+        created_from=$(git config "branch.${branch}.createdfrom" 2>/dev/null || echo "")
+        
+        if [[ -n "$created_from" ]] && [[ "$created_from" != "$base_branch" ]]; then
+            # Check if created_from was at the same commit as base_branch at creation time
+            # If they were at the same commit, it's acceptable (same point in history)
+            local created_from_commit
+            created_from_commit=$(git rev-parse "$created_from" 2>/dev/null || echo "")
+            
+            local base_commit
+            base_commit=$(git rev-parse "$base_branch" 2>/dev/null || echo "")
+            
+            # Only flag as error if:
+            # 1. created_from is not the base_branch AND
+            # 2. created_from commit is different from base_branch commit (not at same point)
+            if [[ -n "$created_from_commit" ]] && [[ -n "$base_commit" ]] && [[ "$created_from_commit" != "$base_commit" ]]; then
+                local allowed_bases
+                allowed_bases="$(get_allowed_bases "$branch")"
+                
+                local error_details="Branch '$branch' was created from '$created_from' instead of '$base_branch'."
+                local suggestions=()
+                
+                suggestions+=("⚠️  Git Flow violation: Wrong branch origin!")
+                suggestions+=("")
+                suggestions+=("Branch: $branch")
+                suggestions+=("Created from: $created_from (❌ WRONG)")
+                suggestions+=("Required base: $base_branch (✓ CORRECT)")
+                suggestions+=("")
+                suggestions+=("This violation was detected from:")
+                suggestions+=("  • Branch creation tracking (stored by post-checkout hook)")
+                suggestions+=("  • You were on '$created_from' when you created '$branch'")
+                suggestions+=("  • Git Flow requires creation from '$base_branch'")
+                suggestions+=("")
+                suggestions+=("⚠️  This is the same error reported by post-checkout hook!")
+                suggestions+=("")
+                suggestions+=("Why this matters:")
+                suggestions+=("  • Ensures all features branch from correct base")
+                suggestions+=("  • Prevents accidental dependencies between branches")
+                suggestions+=("  • Maintains clean Git Flow workflow")
+                suggestions+=("")
+                suggestions+=("To fix:")
+                suggestions+=("  1. Rebase onto correct base:")
+                suggestions+=("     git checkout $branch")
+                suggestions+=("     git rebase --onto $base_branch $(git merge-base $branch $base_branch)")
+                suggestions+=("     git push --force-with-lease")
+                suggestions+=("     git config branch.$branch.createdfrom $base_branch  # Update tracking")
+                suggestions+=("")
+                suggestions+=("  2. Or recreate from correct base (cleaner):")
+                suggestions+=("     # Save your changes")
+                suggestions+=("     git checkout $branch")
+                suggestions+=("     git log --oneline $base_branch..$branch  # Note your commits")
+                suggestions+=("")
+                suggestions+=("     # Recreate branch")
+                suggestions+=("     git checkout $base_branch")
+                suggestions+=("     git checkout -b ${branch}-fixed")
+                suggestions+=("     git cherry-pick <commit1> <commit2>  # Your commits")
+                suggestions+=("")
+                suggestions+=("     # Delete old branch")
+                suggestions+=("     git branch -D $branch")
+                suggestions+=("     git push origin --delete $branch  # If already pushed")
+                suggestions+=("     git branch -m ${branch}-fixed $branch  # Rename back")
+                
+                report_error "$HOOK_NAME" "Git Flow Violation: Wrong Branch Origin" "$error_details" "${suggestions[@]}"
+                return 1
+            fi
+        fi
+    fi
+    
+    return 0
+}
+
+# Validate commit count (curated history)
+validate_commit_count() {
+    local branch="$1"
+    local base_branch="$2"
+    local remote="$3"
+    local branch_sha="${4:-HEAD}"  # Use provided SHA or default to HEAD for backward compat
+    
+    log_to_file "INFO" "$HOOK_NAME" "Validating commit count for: $branch (SHA: $branch_sha)"
+    
+    # Skip for long-lived branches
+    local branch_type
+    branch_type="$(get_branch_type "$branch")"
+    if [[ "$branch_type" == "main" ]] || [[ "$branch_type" == "develop" ]] || [[ "$branch_type" == "release" ]]; then
+        return 0
+    fi
+    
+    # Get max commits configuration
+    local max_commits
+    max_commits=$(get_max_commits)
+    
+    # Count commits unique to this branch (use branch_sha instead of HEAD)
+    local commit_count
+    if [[ -n "$base_branch" ]] && git rev-parse --verify "$base_branch" >/dev/null 2>&1; then
+        commit_count=$(git rev-list --count "${base_branch}..${branch_sha}" 2>/dev/null || echo "0")
+    else
+        # Fallback: count from remote tracking branch
+        local tracking
+        tracking=$(get_tracking_branch "$branch")
+        if [[ -n "$tracking" ]]; then
+            commit_count=$(git rev-list --count "${tracking}..${branch_sha}" 2>/dev/null || echo "0")
+        else
+            # Last resort: count all commits
+            commit_count=$(git rev-list --count "$branch_sha" 2>/dev/null || echo "0")
+        fi
+    fi
+    
+    log_to_file "INFO" "$HOOK_NAME" "Commit count: $commit_count, Max allowed: $max_commits"
+    
+    if [[ "$commit_count" -gt "$max_commits" ]]; then
+        local error_details="Branch has $commit_count commits (limit: $max_commits). Squash commits before pushing."
+        local suggestions=()
+        
+        suggestions+=("Why limit commits? Easier review, cleaner history, simpler reverts.")
+        suggestions+=("")
+        suggestions+=("Fix option 1 - Interactive rebase:")
+        if [[ -n "$base_branch" ]]; then
+            suggestions+=("  git rebase -i $base_branch")
+        else
+            suggestions+=("  git rebase -i HEAD~$commit_count")
+        fi
+        suggestions+=("  # Mark commits as 'squash' or 'fixup', save and exit")
+        suggestions+=("  git push --force-with-lease origin $branch")
+        suggestions+=("")
+        suggestions+=("Fix option 2 - Soft reset (simpler):")
+        if [[ -n "$base_branch" ]]; then
+            suggestions+=("  git reset --soft $base_branch")
+        else
+            suggestions+=("  git reset --soft HEAD~$commit_count")
+        fi
+        
+        local jira_id="PROJ-123"
+        local has_jira=false
+        if jira_id=$(extract_jira_id "$branch"); then
+            has_jira=true
+        fi
+        
+        if [[ "$has_jira" == "true" ]]; then
+            suggestions+=("  git commit -m \"feat: $jira_id your complete description\"")
+        else
+            suggestions+=("  git commit -m \"feat: PROJ-123 your complete description\"  # Use your actual JIRA ID")
+        fi
+        
+        suggestions+=("  git push --force-with-lease origin $branch")
+        suggestions+=("")
+        suggestions+=("Increase limit temporarily (if justified):")
+        suggestions+=("  git config hooks.maxCommits $commit_count")
+        
+        report_error "$HOOK_NAME" "Too Many Commits" "$error_details" "${suggestions[@]}"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Validate linear history (no merge commits)
+validate_linear_history() {
+    local branch="$1"
+    local base_branch="$2"
+    local branch_sha="${3:-HEAD}"  # Use provided SHA or default to HEAD for backward compat
+    
+    log_to_file "INFO" "$HOOK_NAME" "Validating linear history for: $branch (SHA: $branch_sha)"
+    
+    # Skip for main/develop
+    local branch_type
+    branch_type="$(get_branch_type "$branch")"
+    if [[ "$branch_type" == "main" ]] || [[ "$branch_type" == "develop" ]]; then
+        return 0
+    fi
+    
+    # Check for merge commits (use branch_sha instead of HEAD)
+    if [[ -n "$base_branch" ]] && git rev-parse --verify "$base_branch" >/dev/null 2>&1; then
+        if ! has_linear_history "$base_branch" "$branch_sha"; then
+            local merge_count
+            merge_count=$(git rev-list --merges --count "${base_branch}..${branch_sha}")
+            
+            local error_details="Branch contains $merge_count merge commit(s). Use rebase instead of merge."
+            local suggestions=()
+            
+            suggestions+=("View merge commits: git log $base_branch..$branch_sha --merges --oneline")
+            suggestions+=("")
+            suggestions+=("Fix option 1 - Rebase:")
+            suggestions+=("  git fetch origin")
+            suggestions+=("  git rebase origin/$base_branch")
+            suggestions+=("  # Resolve conflicts, then: git rebase --continue")
+            suggestions+=("  git push --force-with-lease origin $branch")
+            suggestions+=("")
+            suggestions+=("Fix option 2 - Recreate branch cleanly:")
+            suggestions+=("  git checkout $base_branch")
+            suggestions+=("  git checkout -b ${branch}-clean $base_branch")
+            suggestions+=("  git cherry-pick <non-merge-commits>")
+            suggestions+=("  git push origin -u ${branch}-clean")
+            suggestions+=("")
+            suggestions+=("Prevent merge commits: git config pull.rebase true")
+            
+            report_error "$HOOK_NAME" "Non-Linear History" "$error_details" "${suggestions[@]}"
+            return 1
+        fi
+        
+        # Check for foxtrot merges (use branch_sha instead of HEAD)
+        if has_foxtrot_merge "$base_branch" "$branch_sha"; then
+            local error_details="Branch '$branch' contains foxtrot merge pattern."
+            local suggestions=()
+            
+            suggestions+=("Foxtrot Merge Detected:")
+            suggestions+=("  A foxtrot merge occurs when a feature branch is merged")
+            suggestions+=("  in the wrong direction, creating a confusing history.")
+            suggestions+=("")
+            suggestions+=("To fix:")
+            suggestions+=("  git rebase origin/$base_branch")
+            suggestions+=("  git push --force-with-lease origin $branch")
+            
+            report_error "$HOOK_NAME" "Foxtrot Merge Pattern" "$error_details" "${suggestions[@]}"
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+# Validate protected branch push
+validate_protected_branch() {
+    local branch="$1"
+    
+    log_to_file "INFO" "$HOOK_NAME" "Checking protected branch: $branch"
+    
+    if is_protected_branch "$branch"; then
+        if ! should_allow_protected; then
+            local error_details="Direct push to protected branch '$branch' is not allowed."
+            local suggestions=()
+            
+            suggestions+=("Protected Branch Policy:")
+            suggestions+=("  - Direct pushes to $branch are restricted")
+            suggestions+=("  - Use Pull Requests for code review")
+            suggestions+=("  - Ensures quality and team awareness")
+            suggestions+=("")
+            suggestions+=("Recommended workflow:")
+            suggestions+=("")
+            suggestions+=("1. Create a feature branch:")
+            suggestions+=("   git checkout develop")
+            suggestions+=("   git checkout -b feat-JIRA-123-your-feature develop")
+            suggestions+=("")
+            suggestions+=("2. Make your changes and commit:")
+            suggestions+=("   git add .")
+            suggestions+=("   git commit -m \"feat: JIRA-123 Your feature description\"")
+            suggestions+=("")
+            suggestions+=("3. Push feature branch:")
+            suggestions+=("   git push origin feat-JIRA-123-your-feature")
+            suggestions+=("")
+            suggestions+=("4. Create Pull Request:")
+            suggestions+=("   - Target branch: $branch")
+            suggestions+=("   - Request code review")
+            suggestions+=("   - Ensure CI passes")
+            suggestions+=("")
+            suggestions+=("Emergency bypass (use with caution):")
+            suggestions+=("  ALLOW_DIRECT_PROTECTED=1 git push")
+            
+            report_error "$HOOK_NAME" "Protected Branch Push Blocked" "$error_details" "${suggestions[@]}"
+            return 1
+        else
+            log_bypass "$HOOK_NAME" "Protected branch push allowed via ALLOW_DIRECT_PROTECTED"
+            print_warning "Pushing directly to protected branch '$branch' (bypassed)"
+        fi
+    fi
+    
+    return 0
+}
+
+# ==============================================================================
+# MAIN HOOK LOGIC
+# ==============================================================================
+
+main() {
+    log_to_file "INFO" "$HOOK_NAME" "Hook execution started"
+    
+    # Check for global bypass
+    if should_bypass_hooks; then
+        log_bypass "$HOOK_NAME" "All hooks bypassed via BYPASS_HOOKS"
+        exit 0
+    fi
+    
+    # Read push details from stdin
+    local remote="$1"
+    local url="$2"
+    
+    local validation_failed=0
+    local z40="0000000000000000000000000000000000000000"
+    local refs_processed=0
+    
+    # Process each ref being pushed
+    while read -r local_ref local_sha remote_ref remote_sha; do
+        refs_processed=$((refs_processed + 1))
+        
+        # Skip deleted branches
+        if [[ "$local_sha" == "$z40" ]]; then
+            continue
+        fi
+        
+        # Extract branch name
+        local branch="${remote_ref#refs/heads/}"
+        local branch_sha="$local_sha"
+        
+        log_to_file "INFO" "$HOOK_NAME" "Processing push: $branch ($local_sha)"
+        
+        # Get base branch
+        local base_branch
+        base_branch=$(get_base_branch "$branch")
+        
+        # Run validations
+        print_header "Validating Push: $branch → $remote"
+        
+        # 1. Branch naming validation
+        if ! validate_branch_naming "$branch" "$branch"; then
+            validation_failed=1
+            break
+        fi
+        print_success "Branch naming: Valid"
+        
+        # 2. Protected branch validation
+        if ! validate_protected_branch "$branch"; then
+            validation_failed=1
+            break
+        fi
+        
+        # 3. Branch base validation (Git Flow)
+        if ! validate_branch_base "$branch" "$base_branch"; then
+            validation_failed=1
+            break
+        fi
+        if [[ -n "$base_branch" ]]; then
+            print_success "Branch base: $base_branch (correct)"
+        fi
+        
+        # 4. Commit count validation (use branch_sha instead of HEAD)
+        if ! validate_commit_count "$branch" "$base_branch" "$remote" "$branch_sha"; then
+            validation_failed=1
+            break
+        fi
+        local commit_count
+        if [[ -n "$base_branch" ]] && git rev-parse --verify "$base_branch" >/dev/null 2>&1; then
+            commit_count=$(git rev-list --count "${base_branch}..${branch_sha}" 2>/dev/null || echo "0")
+        else
+            commit_count=$(git rev-list --count "$branch_sha" 2>/dev/null || echo "0")
+        fi
+        print_success "Commit count: $commit_count/$(get_max_commits)"
+        
+        # 5. Linear history validation (use branch_sha instead of HEAD)
+        if ! validate_linear_history "$branch" "$base_branch" "$branch_sha"; then
+            validation_failed=1
+            break
+        fi
+        print_success "History: Linear (no merge commits)"
+        
+        echo ""
+    done
+    
+    # Validate that we processed at least one ref
+    if [[ $refs_processed -eq 0 ]]; then
+        log_to_file "WARNING" "$HOOK_NAME" "No refs to push (stdin empty or all deleted)"
+        print_warning "No refs to push"
+        exit 0
+    fi
+    
+    if [[ $validation_failed -eq 1 ]]; then
+        log_to_file "ERROR" "$HOOK_NAME" "Push validation failed"
+        exit 1
+    fi
+    
+    log_to_file "INFO" "$HOOK_NAME" "Push validation successful"
+    print_success "All validations passed - push allowed"
+    echo ""
+    
+    exit 0
+}
+
+# Execute main function
+main "$@"

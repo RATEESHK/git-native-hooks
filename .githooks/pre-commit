@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Git Hook: pre-commit
+# ==============================================================================
+# Runs before commit creation. Validates protected branches and executes
+# custom commands defined in .githooks/commands.conf.
+#
+# Features:
+# - Protected branch commit prevention
+# - Custom command execution framework
+# - Lint-staged integration
+# - Auto-fix and re-staging support
+# - Parallel execution support
+# - Timeout handling
+#
+# Environment Variables:
+# - BYPASS_HOOKS=1: Skip all validations
+# - ALLOW_DIRECT_PROTECTED=1: Allow commits to protected branches
+#
+# Configuration:
+# - hooks.autoAddAfterFix: Auto-stage files after fix (default: false)
+# - hooks.parallelExecution: Run commands in parallel (default: false)
+#
+# Author: Enterprise Development Team
+# ==============================================================================
+
+set -euo pipefail
+
+# Source common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+# shellcheck source=lib/command-runner.sh
+source "${SCRIPT_DIR}/lib/command-runner.sh"
+
+readonly HOOK_NAME="pre-commit"
+
+# ==============================================================================
+# VALIDATION FUNCTIONS
+# ==============================================================================
+
+# Validate protected branch commits
+validate_protected_branch_commit() {
+    local current_branch="$1"
+    
+    log_to_file "INFO" "$HOOK_NAME" "Checking protected branch: $current_branch"
+    
+    if is_protected_branch "$current_branch"; then
+        if ! should_allow_protected; then
+            local error_details="Cannot commit directly to protected branch '$current_branch'. Use Pull Requests."
+            local suggestions=()
+            
+            if [[ "$current_branch" == "main" ]]; then
+                suggestions+=("Move to hotfix branch (for production fixes):")
+                suggestions+=("  git stash push -m 'Changes from main'")
+                suggestions+=("  git checkout -b hotfix-PROJ-123-your-fix main")
+                suggestions+=("  git stash pop")
+                suggestions+=("  git add <files> && git commit")
+                suggestions+=("")
+                suggestions+=("Note: Hotfix branches MUST be created from 'main' per Git Flow")
+                suggestions+=("")
+                suggestions+=("🔄 Undo if needed:")
+                suggestions+=("  # If you only stashed (haven't created branch yet):")
+                suggestions+=("  git stash pop               # Recover your changes")
+                suggestions+=("")
+                suggestions+=("  # If you created new branch and want to undo:")
+                suggestions+=("  git stash drop              # Discard stash (changes are in branch)")
+                suggestions+=("  git checkout main           # Go back to main")
+                suggestions+=("  git branch -D hotfix-*      # Delete the hotfix branch")
+                suggestions+=("")
+                suggestions+=("  # If you want to keep the stash:")
+                suggestions+=("  git stash list              # View all stashes")
+                suggestions+=("  git stash show stash@{0}    # See what's in stash")
+            else
+                suggestions+=("Move to feature branch (from develop):")
+                suggestions+=("  git stash push -m 'Changes from develop'")
+                suggestions+=("  git checkout -b feat-PROJ-123-your-feature develop")
+                suggestions+=("  git stash pop")
+                suggestions+=("  git add <files> && git commit")
+                suggestions+=("")
+                suggestions+=("Note: Feature branches MUST be created from 'develop' per Git Flow")
+                suggestions+=("")
+                suggestions+=("🔄 Undo if needed:")
+                suggestions+=("  # If you only stashed (haven't created branch yet):")
+                suggestions+=("  git stash pop               # Recover your changes")
+                suggestions+=("")
+                suggestions+=("  # If you created new branch and want to undo:")
+                suggestions+=("  git stash drop              # Discard stash (changes are in branch)")
+                suggestions+=("  git checkout develop        # Go back to develop")
+                suggestions+=("  git branch -D feat-*        # Delete the feature branch")
+                suggestions+=("")
+                suggestions+=("  # If you want to keep the stash:")
+                suggestions+=("  git stash list              # View all stashes")
+                suggestions+=("  git stash show stash@{0}    # See what's in stash")
+            fi
+            suggestions+=("")
+            suggestions+=("Emergency bypass (use with caution):")
+            suggestions+=("  ALLOW_DIRECT_PROTECTED=1 git commit")
+            
+            report_error "$HOOK_NAME" "Protected Branch" "$error_details" "${suggestions[@]}"
+            return 1
+        else
+            log_bypass "$HOOK_NAME" "Protected branch commit allowed via ALLOW_DIRECT_PROTECTED"
+            print_warning "Committing directly to protected branch '$current_branch' (bypassed)"
+        fi
+    fi
+    
+    return 0
+}
+
+# ==============================================================================
+# MAIN HOOK LOGIC
+# ==============================================================================
+
+main() {
+    log_to_file "INFO" "$HOOK_NAME" "Hook execution started"
+    
+    # Check for global bypass
+    if should_bypass_hooks; then
+        log_bypass "$HOOK_NAME" "Hook bypassed via BYPASS_HOOKS"
+        exit 0
+    fi
+    
+    # Get current branch
+    local current_branch
+    current_branch=$(get_current_branch)
+    
+    print_header "Pre-Commit Validation"
+    
+    # Validate protected branch
+    if ! validate_protected_branch_commit "$current_branch"; then
+        exit 1
+    fi
+    
+    if is_protected_branch "$current_branch"; then
+        print_warning "Working on protected branch: $current_branch"
+    else
+        print_success "Branch: $current_branch"
+    fi
+    
+    # Run custom commands
+    if ! run_hook_commands "$HOOK_NAME"; then
+        log_to_file "ERROR" "$HOOK_NAME" "Custom commands failed"
+        exit 1
+    fi
+    
+    log_to_file "INFO" "$HOOK_NAME" "Pre-commit validation successful"
+    print_success "All pre-commit validations passed"
+    echo ""
+    
+    exit 0
+}
+
+# Execute main function
+main "$@"

@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Git Hook: post-commit
+# ==============================================================================
+# Runs after commit creation. Provides helpful hints about changes that might
+# need additional attention.
+#
+# Features:
+# - Lockfile change detection (all package managers)
+# - Infrastructure as Code (IaC) change detection
+# - CI/CD configuration change detection
+# - Contextual suggestions and reminders
+#
+# Environment Variables:
+# - BYPASS_HOOKS=1: Skip hook
+#
+# Author: Enterprise Development Team
+# ==============================================================================
+
+set -euo pipefail
+
+# Source common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+readonly HOOK_NAME="post-commit"
+
+# ==============================================================================
+# HINT FUNCTIONS
+# ==============================================================================
+
+# Provide hints about lockfile changes
+check_lockfile_changes() {
+    local lockfiles
+    lockfiles=$(detect_lockfile_changes "HEAD^..HEAD")
+    
+    if [[ -n "$lockfiles" ]]; then
+        echo ""
+        print_hint "Lockfile changed - Dependencies updated"
+        
+        while IFS= read -r lockfile; do
+            echo "  • $lockfile"
+        done <<< "$lockfiles"
+        
+        echo ""
+        # Provide specific command based on lockfile type
+        case "$lockfiles" in
+            *package-lock.json*) echo "  npm ci && npm audit && npm test" ;;
+            *yarn.lock*) echo "  yarn install --frozen-lockfile && yarn audit && yarn test" ;;
+            *pnpm-lock.yaml*) echo "  pnpm install --frozen-lockfile && pnpm audit && pnpm test" ;;
+            *Gemfile.lock*) echo "  bundle install && bundle audit && bundle exec rspec" ;;
+            *Pipfile.lock*|*poetry.lock*) echo "  pipenv install && pip check && pytest" ;;
+            *composer.lock*) echo "  composer install && composer audit && vendor/bin/phpunit" ;;
+            *go.sum*) echo "  go mod download && go mod verify && go test ./..." ;;
+            *Cargo.lock*) echo "  cargo build && cargo audit && cargo test" ;;
+        esac
+        echo ""
+        echo "🔄 If lockfile shouldn't have changed:"
+        echo "  git reset --soft HEAD~1   # Undo commit, keep changes"
+        echo "  git restore --staged <lockfile>  # Unstage lockfile"
+        echo "  git restore <lockfile>    # Revert lockfile"
+        echo ""
+        
+        log_to_file "INFO" "$HOOK_NAME" "Lockfile changes detected: $lockfiles"
+    fi
+}
+
+# Provide hints about IaC changes
+check_iac_changes() {
+    if detect_iac_changes "HEAD^..HEAD"; then
+        echo ""
+        print_hint "Infrastructure code changed"
+        
+        # Detect specific IaC file types
+        local iac_files
+        iac_files=$(git diff --name-only HEAD^..HEAD | grep -E '\.(tf|tfvars|yaml|yml|json)$' | grep -E '(terraform|cloudformation|ansible|k8s|kubernetes)' || true)
+        
+        if [[ -n "$iac_files" ]]; then
+            while IFS= read -r file; do
+                echo "  • $file"
+            done <<< "$iac_files"
+            echo ""
+        fi
+        
+        # Show relevant validation command
+        if git diff --name-only HEAD^..HEAD | grep -q '\.tf$'; then
+            echo "  terraform validate && terraform plan"
+        elif git diff --name-only HEAD^..HEAD | grep -qE '(cloudformation|cfn).*\.(yaml|yml|json)$'; then
+            echo "  aws cloudformation validate-template --template-body file://template.yaml"
+        elif git diff --name-only HEAD^..HEAD | grep -qE '(k8s|kubernetes).*\.(yaml|yml)$'; then
+            echo "  kubectl apply --dry-run=server -f <file> && kubectl diff -f <file>"
+        elif git diff --name-only HEAD^..HEAD | grep -qE 'ansible.*\.(yaml|yml)$'; then
+            echo "  ansible-playbook --syntax-check playbook.yml && ansible-playbook --check playbook.yml"
+        fi
+        
+        echo "  ⚠️  Test in dev/staging first! Have rollback plan ready."
+        echo ""
+        echo "🔄 If IaC changes need to be reverted:"
+        echo "  git reset --soft HEAD~1   # Undo commit, keep changes"
+        echo "  git restore --staged <iac-files>  # Unstage IaC files"
+        echo "  git restore <iac-files>   # Revert IaC files"
+        echo ""
+        
+        log_to_file "INFO" "$HOOK_NAME" "IaC changes detected"
+    fi
+}
+
+# Provide hints about CI/CD changes
+check_cicd_changes() {
+    if detect_cicd_changes "HEAD^..HEAD"; then
+        echo ""
+        print_hint "CI/CD pipeline config changed"
+        
+        # Detect specific CI/CD file types
+        local cicd_files
+        cicd_files=$(git diff --name-only HEAD^..HEAD | grep -E '(\.github/workflows|\.gitlab-ci|\.circleci|Jenkinsfile|azure-pipelines|buildspec)' || true)
+        
+        if [[ -n "$cicd_files" ]]; then
+            while IFS= read -r file; do
+                echo "  • $file"
+            done <<< "$cicd_files"
+            echo ""
+        fi
+        
+        # Show relevant validation command
+        if git diff --name-only HEAD^..HEAD | grep -q '\.github/workflows/.*\.ya*ml$'; then
+            echo "  actionlint .github/workflows/*.yml"
+        elif git diff --name-only HEAD^..HEAD | grep -q '\.gitlab-ci\.ya*ml$'; then
+            echo "  gitlab-ci-lint .gitlab-ci.yml"
+        elif git diff --name-only HEAD^..HEAD | grep -q '\.circleci/config\.ya*ml$'; then
+            echo "  circleci config validate"
+        elif git diff --name-only HEAD^..HEAD | grep -q 'azure-pipelines\.ya*ml$'; then
+            echo "  az pipelines validate --yaml-path azure-pipelines.yml"
+        fi
+        
+        local current_branch
+        current_branch=$(get_current_branch)
+        
+        echo "  ⚠️  Test in feature branch first!"
+        echo "  Push to trigger: git push origin $current_branch"
+        echo ""
+        echo "🔄 If CI/CD config needs to be reverted:"
+        echo "  git reset --soft HEAD~1   # Undo commit, keep changes"
+        echo "  git restore --staged <cicd-files>  # Unstage CI/CD files"
+        echo "  git restore <cicd-files>  # Revert CI/CD files"
+        echo ""
+        
+        log_to_file "INFO" "$HOOK_NAME" "CI/CD changes detected"
+    fi
+}
+
+# ==============================================================================
+# MAIN HOOK LOGIC
+# ==============================================================================
+
+main() {
+    log_to_file "INFO" "$HOOK_NAME" "Hook execution started"
+    
+    # Check for global bypass
+    if should_bypass_hooks; then
+        exit 0
+    fi
+    
+    # Run hint checks
+    check_lockfile_changes
+    check_iac_changes
+    check_cicd_changes
+    
+    log_to_file "INFO" "$HOOK_NAME" "Hook execution completed"
+    
+    exit 0
+}
+
+# Execute main function
+main "$@"

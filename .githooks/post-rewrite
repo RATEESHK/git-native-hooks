@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Git Hook: post-rewrite
+# ==============================================================================
+# Runs after commands that rewrite commits (rebase, commit --amend).
+# Provides helpful reminders about force-pushing and history changes.
+#
+# Features:
+# - Rebase completion reminders
+# - Force-push guidance
+# - History rewriting best practices
+#
+# Environment Variables:
+# - BYPASS_HOOKS=1: Skip hook
+#
+# Author: Enterprise Development Team
+# ==============================================================================
+
+set -euo pipefail
+
+# Source common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+readonly HOOK_NAME="post-rewrite"
+
+# ==============================================================================
+# MAIN HOOK LOGIC
+# ==============================================================================
+
+main() {
+    local rewrite_type="$1"
+    
+    log_to_file "INFO" "$HOOK_NAME" "Hook execution started (type: $rewrite_type)"
+    
+    # Check for global bypass
+    if should_bypass_hooks; then
+        exit 0
+    fi
+    
+    # Get current branch
+    local current_branch
+    current_branch=$(get_current_branch)
+    
+    if [[ "$current_branch" == "DETACHED" ]]; then
+        exit 0
+    fi
+    
+    # Check if branch has remote tracking
+    local tracking_branch
+    tracking_branch=$(get_tracking_branch "$current_branch")
+    
+    if [[ -z "$tracking_branch" ]]; then
+        # No tracking branch, no need for force-push reminder
+        exit 0
+    fi
+    
+    case "$rewrite_type" in
+        rebase)
+            echo ""
+            print_success "Rebase completed"
+            print_warning "Force-push required"
+            echo ""
+            echo "Next steps:"
+            echo "  1. Review: git log --oneline -10"
+            echo "  2. Check:  git log --oneline $tracking_branch..$current_branch"
+            echo "  3. Push:   git push --force-with-lease origin $current_branch"
+            echo ""
+            echo "⚠️  Use --force-with-lease (safer than --force)"
+            echo ""
+            echo "🔄 Undo rebase if needed:"
+            echo "  git reflog                    # Find pre-rebase commit"
+            echo "  git reset --hard HEAD@{N}     # Go back to commit N"
+            echo "  git reset --hard ORIG_HEAD    # Quick undo (if available)"
+            echo ""
+            
+            log_to_file "INFO" "$HOOK_NAME" "Rebase completed on: $current_branch"
+            ;;
+            
+        amend)
+            # Only show reminder if branch is pushed
+            if branch_exists_remote "$current_branch"; then
+                echo ""
+                print_info "Commit amended - force-push if already pushed"
+                echo "  git push --force-with-lease origin $current_branch"
+                echo ""
+                echo "🔄 Undo amend:"
+                echo "  git reset --soft HEAD@{1}     # Keep changes"
+                echo "  git reset --hard HEAD@{1}     # Discard changes"
+                echo ""
+                
+                log_to_file "INFO" "$HOOK_NAME" "Commit amended on: $current_branch"
+            fi
+            ;;
+    esac
+    
+    exit 0
+}
+
+# Execute main function
+main "$@"

@@ -1,0 +1,375 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Git Hook: post-checkout
+# ==============================================================================
+# Runs after checkout to enforce Git Flow branching model.
+#
+# Features:
+# - ✅ Git Flow base branch validation (CRITICAL)
+# - ✅ Prevents feature branches from main
+# - ✅ Prevents hotfix branches from develop
+# - ✅ Protected branch warnings
+# - ✅ Branch naming convention validation
+# - ✅ Context-aware error messages with fixes
+#
+# Git Flow Rules Enforced:
+# - Feature/bugfix/support branches → MUST branch from 'develop'
+# - Hotfix branches → MUST branch from 'main'
+# - Release branches → MUST branch from 'develop'
+#
+# Environment Variables:
+# - BYPASS_HOOKS=1: Skip hook (not recommended for base branch validation)
+#
+# Author: Enterprise Development Team
+# ==============================================================================
+
+set -euo pipefail
+
+# Source common library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+
+readonly HOOK_NAME="post-checkout"
+
+# ==============================================================================
+# MAIN HOOK LOGIC
+# ==============================================================================
+
+main() {
+    local prev_head="$1"
+    local new_head="$2"
+    local branch_checkout="$3"
+    
+    log_to_file "INFO" "$HOOK_NAME" "Hook execution started"
+    
+    # Check for global bypass
+    if should_bypass_hooks; then
+        exit 0
+    fi
+    
+    # Only process branch checkouts
+    if [[ "$branch_checkout" != "1" ]]; then
+        exit 0
+    fi
+    
+    # Get current branch
+    local current_branch
+    current_branch=$(get_current_branch)
+    
+    if [[ "$current_branch" == "DETACHED" ]]; then
+        exit 0
+    fi
+    
+    log_to_file "INFO" "$HOOK_NAME" "Checked out branch: $current_branch"
+    
+    # Detect if this is a new branch creation (prev_head will be same as new_head's parent)
+    local is_new_branch=false
+    local prev_branch=""
+    
+    # Check if this is a branch creation by examining git reflog
+    local reflog_entry
+    reflog_entry=$(git reflog -1 --format='%gs' 2>/dev/null || echo "")
+    
+    if [[ "$reflog_entry" =~ checkout:\ moving\ from\ ([^\ ]+)\ to\ $current_branch ]]; then
+        prev_branch="${BASH_REMATCH[1]}"
+        
+        # Check if current branch existed before this checkout
+        if ! git show-ref --verify --quiet "refs/heads/${current_branch}@{1}" 2>/dev/null; then
+            is_new_branch=true
+            log_to_file "INFO" "$HOOK_NAME" "New branch created: $current_branch from $prev_branch"
+            
+            # Store the branch creation source for later validation by pre-push hook
+            git config "branch.${current_branch}.createdfrom" "$prev_branch"
+        fi
+    fi
+    
+    # GIT FLOW BASE BRANCH VALIDATION (Critical!)
+    if [[ "$is_new_branch" == "true" ]] && [[ -n "$prev_branch" ]]; then
+        local branch_type
+        branch_type=$(get_branch_type "$current_branch")
+        
+        # Only validate if it's a recognized Git Flow branch type
+        if [[ "$branch_type" != "main" ]] && [[ "$branch_type" != "develop" ]] && [[ "$branch_type" != "unknown" ]]; then
+            # Validate base branch according to Git Flow
+            if ! validate_branch_origin "$current_branch" "$prev_branch"; then
+                local allowed_bases
+                allowed_bases="$(get_allowed_bases "$current_branch")"
+                
+                echo ""
+                print_error "Git Flow Violation: Invalid Base Branch"
+                echo ""
+                print_color "$COLOR_RED" "❌ CRITICAL: Branch created from wrong base!"
+                echo ""
+                echo "Branch:         $current_branch"
+                echo "Branch type:    $branch_type"
+                echo "Created from:   $prev_branch (❌ WRONG)"
+                echo "Required base:  $allowed_bases (✓ CORRECT)"
+                echo ""
+                print_color "$COLOR_YELLOW" "═══════════════════════════════════════════════════════════════"
+                print_color "$COLOR_YELLOW" "                    GIT FLOW RULES"
+                print_color "$COLOR_YELLOW" "═══════════════════════════════════════════════════════════════"
+                echo ""
+                
+                case "$branch_type" in
+                    feature|bugfix|support)
+                        echo "📋 Feature/Bugfix/Support branches:"
+                        echo "   • MUST branch from: 'develop'"
+                        echo "   • MUST merge into: 'develop'"
+                        echo "   • Purpose: New features and bug fixes for next release"
+                        echo ""
+                        echo "   Types: feat, feature, bugfix, fix, build, chore, ci,"
+                        echo "          docs, techdebt, perf, refactor, revert, style, test"
+                        ;;
+                    release)
+                        echo "📦 Release branches:"
+                        echo "   • MUST branch from: 'develop'"
+                        echo "   • MUST merge into: 'develop' AND 'main'"
+                        echo "   • Purpose: Prepare for production release"
+                        echo "   • Naming: release-* or release/*"
+                        ;;
+                    hotfix)
+                        echo "🔥 Hotfix branches:"
+                        echo "   • MUST branch from: 'main'"
+                        echo "   • MUST merge into: 'develop' AND 'main'"
+                        echo "   • Purpose: Emergency fixes for production"
+                        echo "   • Naming: hotfix-JIRA-123-description"
+                        ;;
+                esac
+                
+                echo ""
+                print_color "$COLOR_YELLOW" "═══════════════════════════════════════════════════════════════"
+                echo ""
+                
+                # Extract JIRA ID for better suggestions
+                local jira_id="PROJ-123"
+                local has_jira=false
+                if jira_id=$(extract_jira_id "$current_branch"); then
+                    has_jira=true
+                fi
+                
+                echo "❌ Your current situation:"
+                echo "   You created a $branch_type branch from '$prev_branch'"
+                echo "   This violates Git Flow because $branch_type branches"
+                echo "   must be created from '$allowed_bases'"
+                echo ""
+                echo "🔧 FIX OPTION 1 - Recreate from correct base (RECOMMENDED):"
+                echo ""
+                echo "   Step 1: Go to correct base branch"
+                echo "     git checkout $allowed_bases"
+                echo ""
+                echo "   Step 2: Create new branch with proper name from correct base"
+                
+                # Provide correct branch name suggestion
+                case "$branch_type" in
+                    feature|bugfix)
+                        if [[ "$has_jira" == "true" ]]; then
+                            echo "     git checkout -b feat-${jira_id}-your-description"
+                        else
+                            echo "     git checkout -b feat-PROJ-123-your-description  # Use your actual JIRA ID"
+                        fi
+                        ;;
+                    support)
+                        if [[ "$has_jira" == "true" ]]; then
+                            echo "     git checkout -b chore-${jira_id}-your-description"
+                        else
+                            echo "     git checkout -b chore-PROJ-123-your-description  # Use your actual JIRA ID"
+                        fi
+                        ;;
+                    hotfix)
+                        if [[ "$has_jira" == "true" ]]; then
+                            echo "     git checkout -b hotfix-${jira_id}-your-description"
+                        else
+                            echo "     git checkout -b hotfix-PROJ-123-your-description  # Use your actual JIRA ID"
+                        fi
+                        ;;
+                    release)
+                        echo "     git checkout -b release-1.0.0"
+                        echo "     # OR: git checkout -b release/1.0.0"
+                        ;;
+                esac
+                
+                echo ""
+                echo "   Step 3: Delete the incorrectly created branch"
+                echo "     git branch -D $current_branch"
+                echo ""
+                echo "🔧 FIX OPTION 2 - Rebase onto correct base (ADVANCED):"
+                echo ""
+                echo "   ⚠️  Use this ONLY if you have NO commits yet!"
+                echo ""
+                echo "   Step 1: Ensure you're on the wrong branch"
+                echo "     git checkout $current_branch"
+                echo ""
+                echo "   Step 2: Rebase onto correct base"
+                echo "     git rebase --onto $allowed_bases $prev_branch $current_branch"
+                echo ""
+                echo "   Step 3: Verify the base"
+                echo "     git log --oneline $allowed_bases..$current_branch"
+                echo ""
+                echo "🔄 UNDO - Delete branch and start over:"
+                echo ""
+                echo "   Step 1: Switch to safe branch"
+                echo "     git checkout $prev_branch"
+                echo ""
+                echo "   Step 2: Delete wrong branch"
+                echo "     git branch -D $current_branch"
+                echo ""
+                echo "   Step 3: Create correctly"
+                echo "     git checkout $allowed_bases"
+                echo "     git checkout -b <correct-branch-name>"
+                echo ""
+                print_color "$COLOR_RED" "⛔ This branch will be REJECTED on push!"
+                print_color "$COLOR_YELLOW" "⚠️  Fix this NOW to avoid losing work later."
+                echo ""
+                print_color "$COLOR_GRAY" "📖 Learn more: https://nvie.com/posts/a-successful-git-branching-model/"
+                print_color "$COLOR_GRAY" "💡 This check enforces Git Flow for team consistency"
+                echo ""
+                
+                log_to_file "ERROR" "$HOOK_NAME" "Git Flow violation: $current_branch created from $prev_branch (should be $allowed_bases)"
+                
+                # Exit with error to prevent continuing with wrong branch
+                exit 1
+            else
+                # Base branch is correct
+                log_to_file "INFO" "$HOOK_NAME" "Git Flow validated: $current_branch created from $prev_branch (correct)"
+                echo ""
+                print_success "Git Flow: Branch created from correct base '$prev_branch'"
+                echo ""
+            fi
+        fi
+    fi
+    
+    # Check if protected branch
+    if is_protected_branch "$current_branch"; then
+        echo ""
+        print_warning "You are now on protected branch: $current_branch"
+        echo ""
+        echo "⚠️  Direct commits are restricted on this branch"
+        echo ""
+        if [[ "$current_branch" == "main" ]]; then
+            echo "To make changes (hotfix for production):"
+            echo "  git checkout -b hotfix-JIRA-123-description main"
+        else
+            echo "To make changes (feature/bugfix):"
+            echo "  git checkout -b feat-JIRA-123-description develop"
+        fi
+        echo ""
+    else
+        # Non-protected branch - check naming only if not already validated above
+        local branch_type
+        branch_type=$(get_branch_type "$current_branch")
+        
+        if [[ "$branch_type" == "unknown" ]]; then
+            echo ""
+            print_warning "Branch '$current_branch' doesn't follow Git Flow naming"
+            echo ""
+            
+            # Try to extract any ticket ID from current branch name
+            local suggested_jira="PROJ-123"
+            local has_jira=false
+            if [[ "$current_branch" =~ ([A-Z]{2,10}[-_]?[0-9]+) ]]; then
+                local extracted="${BASH_REMATCH[1]}"
+                suggested_jira="${extracted//_/-}"
+                has_jira=true
+                echo "✓ Detected JIRA: $suggested_jira"
+                echo ""
+            else
+                echo "⚠ No JIRA ID detected in branch name"
+                echo ""
+            fi
+            
+            # Detect previous branch from reflog (Git Flow compliant)
+            local base_branch="develop"
+            if [[ "$prev_head" != "0000000000000000000000000000000000000000" ]]; then
+                # Get the branch we came from via reflog
+                if [[ -n "$prev_branch" ]]; then
+                    # Use the already detected prev_branch
+                    if [[ "$prev_branch" =~ ^(main|develop|release/.+)$ ]]; then
+                        base_branch="$prev_branch"
+                    fi
+                fi
+            fi
+            
+            echo "Required format: <type>-<JIRA>-<description>"
+            echo ""
+            echo "Git Flow rules:"
+            echo "  • Feature/bugfix → branch from 'develop'"
+            echo "  • Hotfix → branch from 'main'"
+            echo "  • Release → branch from 'develop'"
+            echo ""
+            echo "Examples:"
+            
+            if [[ "$has_jira" == "true" ]]; then
+                echo "  feat-${suggested_jira}-add-user-auth (from develop)"
+                echo "  hotfix-${suggested_jira}-security-fix (from main)"
+            else
+                echo "  feat-PROJ-123-add-user-auth (from develop)"
+                echo "  hotfix-PROJ-123-security-fix (from main)"
+                echo "  (Replace PROJ-123 with your actual JIRA ticket)"
+            fi
+            
+            echo ""
+            echo "Option 1 - Create new branch properly (recommended):"
+            echo "  # For feature/bugfix:"
+            echo "  git checkout develop"
+            
+            if [[ "$has_jira" == "true" ]]; then
+                echo "  git checkout -b feat-${suggested_jira}-your-description"
+            else
+                echo "  git checkout -b feat-PROJ-123-your-description  # Use your actual JIRA ID"
+            fi
+            
+            echo "  git branch -D $current_branch  # Delete old incorrectly-named branch"
+            echo ""
+            echo "  # For hotfix:"
+            echo "  git checkout main"
+            
+            if [[ "$has_jira" == "true" ]]; then
+                echo "  git checkout -b hotfix-${suggested_jira}-your-fix"
+            else
+                echo "  git checkout -b hotfix-PROJ-123-your-fix  # Use your actual JIRA ID"
+            fi
+            
+            echo "  git branch -D $current_branch  # Delete old incorrectly-named branch"
+            echo ""
+            echo "Option 2 - Quick rename (if no commits yet):"
+            
+            if [[ "$has_jira" == "true" ]]; then
+                echo "  git branch -m $current_branch feat-${suggested_jira}-your-description"
+            else
+                echo "  git branch -m $current_branch feat-PROJ-123-your-description  # Use your actual JIRA ID"
+            fi
+            
+            echo ""
+            echo "🔄 Undo if you created new branch but want to go back:"
+            echo "  # You're currently on: $current_branch (wrong name)"
+            echo "  # If you created new branch and want to undo:"
+            echo "  git checkout <previous-branch>  # Go back to where you came from (develop/main)"
+            
+            if [[ "$has_jira" == "true" ]]; then
+                echo "  git branch -D feat-${suggested_jira}-your-description  # Delete the new branch"
+            else
+                echo "  git branch -D feat-PROJ-123-your-description  # Delete the new branch"
+            fi
+            
+            echo "  git branch -D $current_branch  # Also delete this wrong branch"
+            echo ""
+            echo "🔄 Undo if you renamed branch but want to undo:"
+            
+            if [[ "$has_jira" == "true" ]]; then
+                echo "  git branch -m feat-${suggested_jira}-your-description $current_branch  # Rename back"
+            else
+                echo "  git branch -m feat-PROJ-123-your-description $current_branch  # Rename back"
+            fi
+            
+            echo ""
+            echo "⚠️  This will block your push later. Fix it now to save time!"
+            echo ""
+        fi
+    fi
+    
+    exit 0
+}
+
+# Execute main function
+main "$@"
