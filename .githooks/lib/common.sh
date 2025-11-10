@@ -544,7 +544,7 @@ validate_commit_message_for_branch() {
         
         # Pattern 2: Standard format WITHOUT JIRA ID (feat: description)
         # Allows: feat: description, fix: description, chore: description, etc.
-        if [[ "$message" =~ ^(feat|fix|chore|break|tests|docs|style|refactor|perf|build|ci|release|version): .+ ]]; then
+        if [[ "$message" =~ ^(feat|fix|chore|break|tests|docs|style|refactor|perf|build|ci|release|version):[[:space:]][^[:space:]].*$ ]]; then
             return 0
         fi
         
