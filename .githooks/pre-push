@@ -180,6 +180,67 @@ validate_branch_base() {
         return 1
     fi
     
+    # CRITICAL: Validate base branch TYPE allows branching
+    # This catches cases where post-checkout was bypassed
+    if [[ -n "$base_branch" ]]; then
+        local base_branch_type
+        base_branch_type="$(get_branch_type "$base_branch")"
+        
+        local can_branch_result
+        can_branch_from "$base_branch_type"
+        can_branch_result=$?
+        
+        if [[ $can_branch_result -eq 1 ]]; then
+            local error_details="Branch '$branch' was created from a $base_branch_type branch, which violates Git Flow."
+            local suggestions=()
+            
+            suggestions+=("⛔ GIT FLOW VIOLATION: Branching FROM ${base_branch_type^} Branch")
+            suggestions+=("")
+            suggestions+=("Branch: $branch")
+            suggestions+=("Created from: $base_branch (type: $base_branch_type)")
+            suggestions+=("Branch type: $branch_type")
+            suggestions+=("")
+            
+            if [[ "$base_branch_type" == "release" ]]; then
+                suggestions+=("Git Flow Rule:")
+                suggestions+=("  • Release branches do NOT allow creating new branches")
+                suggestions+=("  • Bug fixes must be committed DIRECTLY on the release branch")
+                suggestions+=("  • Per official Git Flow: \"bug fixes may be applied IN THIS BRANCH\"")
+                suggestions+=("")
+                suggestions+=("Why this matters:")
+                suggestions+=("  • Keeps release preparation clean and focused")
+                suggestions+=("  • Fixes go directly to release, no branch overhead")
+                suggestions+=("  • Release branch merges back to develop and main")
+                suggestions+=("")
+            elif [[ "$base_branch_type" == "hotfix" ]]; then
+                suggestions+=("Git Flow Rule:")
+                suggestions+=("  • Hotfix branches do NOT allow creating new branches")
+                suggestions+=("  • Fixes must be committed DIRECTLY on the hotfix branch")
+                suggestions+=("  • Hotfix merges to both main AND develop")
+                suggestions+=("")
+            fi
+            
+            suggestions+=("To fix:")
+            suggestions+=("  1. Delete this incorrectly created branch:")
+            suggestions+=("     git push origin --delete $branch")
+            suggestions+=("     git branch -D $branch")
+            suggestions+=("")
+            suggestions+=("  2. Checkout the correct base and recreate:")
+            suggestions+=("     git checkout develop")
+            suggestions+=("     git checkout -b ${branch}-correct develop")
+            suggestions+=("     git cherry-pick <your-commits>")
+            suggestions+=("")
+            suggestions+=("  3. Or work directly on $base_branch:")
+            suggestions+=("     git checkout $base_branch")
+            suggestions+=("     # Make changes and commit directly")
+            suggestions+=("")
+            suggestions+=("📖 Learn more: https://nvie.com/posts/a-successful-git-branching-model/")
+            
+            report_error "$HOOK_NAME" "Invalid Branch Origin - Cannot Branch FROM $base_branch_type" "$error_details" "${suggestions[@]}"
+            return 1
+        fi
+    fi
+    
     # Validate base is correct for branch type
     if ! validate_branch_origin "$branch" "$base_branch"; then
         local allowed_bases

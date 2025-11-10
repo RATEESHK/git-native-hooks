@@ -89,6 +89,135 @@ main() {
         local branch_type
         branch_type=$(get_branch_type "$current_branch")
         
+        # CRITICAL: Check if previous branch allows creating branches FROM it
+        # Per Git Flow: Cannot create branches from release or hotfix branches
+        local prev_branch_type
+        prev_branch_type=$(get_branch_type "$prev_branch")
+        
+        # Check if we can branch from the previous branch
+        local can_branch_result
+        can_branch_from "$prev_branch_type"
+        can_branch_result=$?
+        
+        # Block if branching from release or hotfix (return code 1)
+        if [[ $can_branch_result -eq 1 ]]; then
+            echo ""
+            print_error "Git Flow Violation: Cannot Create Branches FROM ${prev_branch_type^} Branches"
+            echo ""
+            print_color "$COLOR_RED" "❌ CRITICAL: You attempted to create a branch FROM a $prev_branch_type branch!"
+            echo ""
+            echo "Current situation:"
+            echo "  Previous branch: $prev_branch (type: $prev_branch_type)"
+            echo "  New branch: $current_branch"
+            echo ""
+            
+            if [[ "$prev_branch_type" == "release" ]]; then
+                print_color "$COLOR_YELLOW" "═══════════════════════════════════════════════════════════════"
+                print_color "$COLOR_YELLOW" "       GIT FLOW: RELEASE BRANCH WORKFLOW"
+                print_color "$COLOR_YELLOW" "═══════════════════════════════════════════════════════════════"
+                echo ""
+                echo "📋 Release Branch Purpose:"
+                echo "   • Prepare for a production release"
+                echo "   • Apply bug fixes DIRECTLY on the release branch"
+                echo "   • NO new features allowed"
+                echo "   • NO branching allowed"
+                echo ""
+                print_color "$COLOR_CYAN" "Official Git Flow Rule (nvie.com):"
+                print_color "$COLOR_WHITE" "  \"During that time, bug fixes may be applied IN THIS BRANCH\""
+                print_color "$COLOR_WHITE" "  \"(rather than on the develop branch)\""
+                echo ""
+                echo "✓ CORRECT: Commit bug fixes DIRECTLY on release branch"
+                echo "  git checkout $prev_branch"
+                echo "  # Make your fix"
+                echo "  git add <files>"
+                echo "  git commit -m \"fix: PROJ-123 fix bug in release\""
+                echo "  # Note: JIRA ID is OPTIONAL for release branch commits"
+                echo ""
+                echo "✓ CORRECT: Simple release tasks without JIRA"
+                echo "  git commit -m \"Bump version to 1.2.0\""
+                echo "  git commit -m \"Update changelog\""
+                echo ""
+                echo "❌ WRONG: Create a new branch from release"
+                echo "  git checkout -b feat-PROJ-123-fix  # This is blocked!"
+                echo ""
+            elif [[ "$prev_branch_type" == "hotfix" ]]; then
+                print_color "$COLOR_YELLOW" "═══════════════════════════════════════════════════════════════"
+                print_color "$COLOR_YELLOW" "       GIT FLOW: HOTFIX BRANCH WORKFLOW"
+                print_color "$COLOR_YELLOW" "═══════════════════════════════════════════════════════════════"
+                echo ""
+                echo "🔥 Hotfix Branch Purpose:"
+                echo "   • Emergency fix for production"
+                echo "   • Created from 'main' branch"
+                echo "   • Apply fixes DIRECTLY on hotfix branch"
+                echo "   • Merge to BOTH main AND develop"
+                echo "   • NO branching allowed"
+                echo ""
+                echo "✓ CORRECT: Commit fixes DIRECTLY on hotfix branch"
+                echo "  git checkout $prev_branch"
+                echo "  # Make your urgent fix"
+                echo "  git add <files>"
+                echo "  git commit -m \"fix: PROJ-123 critical security patch\""
+                echo ""
+                echo "❌ WRONG: Create a new branch from hotfix"
+                echo "  git checkout -b feat-PROJ-456-another  # This is blocked!"
+                echo ""
+            fi
+            
+            print_color "$COLOR_YELLOW" "═══════════════════════════════════════════════════════════════"
+            echo ""
+            echo "🔧 TO FIX THIS ISSUE:"
+            echo ""
+            echo "Option 1: Delete the incorrectly created branch and commit directly"
+            echo "  git checkout $prev_branch           # Go back to $prev_branch_type branch"
+            echo "  git branch -D $current_branch      # Delete wrong branch"
+            echo "  # Now make your changes and commit directly to $prev_branch"
+            echo ""
+            echo "Option 2: If you need to create a proper feature branch"
+            echo "  git checkout develop                # Go to develop"
+            echo "  git checkout -b feat-PROJ-123-your-feature develop"
+            echo "  git branch -D $current_branch      # Delete wrong branch"
+            echo "  # This creates a proper feature branch from develop"
+            echo ""
+            echo "⚠️  Important Notes:"
+            echo "  • Bug fixes during release: Commit DIRECTLY on release-* branch"
+            echo "  • Emergency production fixes: Commit DIRECTLY on hotfix-* branch"
+            echo "  • New features: Create from 'develop', NOT from release/hotfix"
+            echo "  • Release branch commits: JIRA ID is OPTIONAL (use \"Bump version\" etc.)"
+            echo ""
+            print_color "$COLOR_RED" "⛔ This branch creation violates Git Flow and has been blocked!"
+            print_color "$COLOR_YELLOW" "⚠️  Please follow the correct workflow above."
+            echo ""
+            print_color "$COLOR_GRAY" "📖 Learn more: https://nvie.com/posts/a-successful-git-branching-model/"
+            echo ""
+            
+            log_to_file "ERROR" "$HOOK_NAME" "Blocked branch creation FROM $prev_branch_type: $current_branch from $prev_branch"
+            exit 1
+        fi
+        
+        # Warn if branching from another feature/bugfix (return code 2)
+        if [[ $can_branch_result -eq 2 ]]; then
+            echo ""
+            print_warning "Branching FROM another feature/bugfix branch (unusual pattern)"
+            echo ""
+            echo "Detected:"
+            echo "  Previous branch: $prev_branch (type: $prev_branch_type)"
+            echo "  New branch: $current_branch"
+            echo ""
+            echo "This is unusual but may be valid for:"
+            echo "  • Dependent features (Feature B depends on Feature A)"
+            echo "  • Experimental branches"
+            echo ""
+            echo "⚠️  Typical Git Flow pattern:"
+            echo "  • Create features from 'develop'"
+            echo "  • This ensures features are independent"
+            echo ""
+            echo "Correct pattern:"
+            echo "  git checkout develop"
+            echo "  git checkout -b feat-PROJ-200-new-feature develop"
+            echo ""
+            log_to_file "WARNING" "$HOOK_NAME" "Branching from $prev_branch_type: $current_branch from $prev_branch"
+        fi
+        
         # Only validate if it's a recognized Git Flow branch type
         if [[ "$branch_type" != "main" ]] && [[ "$branch_type" != "develop" ]] && [[ "$branch_type" != "unknown" ]]; then
             # Validate base branch according to Git Flow
@@ -126,7 +255,8 @@ main() {
                         echo "   • MUST branch from: 'develop'"
                         echo "   • MUST merge into: 'develop' AND 'main'"
                         echo "   • Purpose: Prepare for production release"
-                        echo "   • Naming: release-* or release/*"
+                        echo "   • Naming: release-X.Y.Z (version number, NO JIRA ID)"
+                        echo "   • Examples: release-1.2.0, release-2.0.0-rc1"
                         ;;
                     hotfix)
                         echo "🔥 Hotfix branches:"
@@ -184,8 +314,8 @@ main() {
                         fi
                         ;;
                     release)
-                        echo "     git checkout -b release-1.0.0"
-                        echo "     # OR: git checkout -b release/1.0.0"
+                        echo "     git checkout -b release-1.2.0  # Version number, NO JIRA ID"
+                        echo "     # OR: git checkout -b release-2.0.0-rc1  # Pre-release version"
                         ;;
                 esac
                 
@@ -284,7 +414,7 @@ main() {
                 # Get the branch we came from via reflog
                 if [[ -n "$prev_branch" ]]; then
                     # Use the already detected prev_branch
-                    if [[ "$prev_branch" =~ ^(main|develop|release/.+)$ ]]; then
+                    if [[ "$prev_branch" =~ ^(main|develop|release-.+)$ ]]; then
                         base_branch="$prev_branch"
                     fi
                 fi

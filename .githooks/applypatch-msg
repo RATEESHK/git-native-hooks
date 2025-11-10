@@ -45,34 +45,72 @@ main() {
     
     log_to_file "INFO" "$HOOK_NAME" "Validating patch message: $commit_msg"
     
-    # Validate commit message format
-    if validate_commit_message "$commit_msg"; then
-        log_to_file "INFO" "$HOOK_NAME" "Patch message valid: $commit_msg"
+    # Get current branch for context-aware validation
+    local current_branch
+    current_branch=$(get_current_branch)
+    
+    # Validate commit message with branch-aware rules
+    # Release branches: JIRA ID is OPTIONAL (soft validation)
+    # Other branches: JIRA ID is REQUIRED (strict validation)
+    if validate_commit_message_for_branch "$commit_msg" "$current_branch"; then
+        local branch_type
+        branch_type=$(get_branch_type "$current_branch")
+        
+        # Log additional context for release branches
+        if [[ "$branch_type" == "release" ]]; then
+            log_to_file "INFO" "$HOOK_NAME" "Patch message valid (release branch - JIRA optional): $commit_msg"
+        else
+            log_to_file "INFO" "$HOOK_NAME" "Patch message valid: $commit_msg"
+        fi
         exit 0
     fi
     
-    # Message is invalid
-    local error_details="Patch message must follow: <type>: <JIRA-ID> <description>"
-    local suggestions=()
-    
-    local current_branch
-    current_branch=$(get_current_branch)
+    # Message is invalid - provide context-aware guidance
+    local branch_type
+    branch_type=$(get_branch_type "$current_branch")
     
     local jira_id="PROJ-123"
     if jira_id=$(extract_jira_id "$current_branch"); then
         : # JIRA ID found
     fi
     
-    suggestions+=("Your message: \"$commit_msg\"")
-    suggestions+=("")
-    suggestions+=("Fix option 1 - Interactive mode:")
-    suggestions+=("  git am --abort")
-    suggestions+=("  git am --interactive <patch-file>.patch")
-    suggestions+=("  # Press 'e' to edit message")
-    suggestions+=("")
-    suggestions+=("Fix option 2 - Apply and amend:")
-    suggestions+=("  git am --no-verify <patch-file>.patch")
-    suggestions+=("  git commit --amend -m \"feat: $jira_id apply patch description\"")
+    local error_details
+    local suggestions=()
+    
+    if [[ "$branch_type" == "release" ]]; then
+        error_details="Patch message format is invalid (JIRA ID is optional for release branches)"
+        suggestions+=("Your message: \"$commit_msg\"")
+        suggestions+=("")
+        suggestions+=("ℹ️  Release Branch: JIRA ID is OPTIONAL (per Git Flow)")
+        suggestions+=("")
+        suggestions+=("Valid formats (any of these work):")
+        suggestions+=("  1. With JIRA ID: feat: JIRA-123 apply patch")
+        suggestions+=("  2. Without JIRA: feat: apply patch")
+        suggestions+=("  3. Without JIRA: chore: update configuration")
+        suggestions+=("  4. Simple: Update version")
+        suggestions+=("")
+        suggestions+=("Fix option 1 - Interactive mode:")
+        suggestions+=("  git am --abort")
+        suggestions+=("  git am --interactive <patch-file>.patch")
+        suggestions+=("  # Press 'e' to edit message")
+        suggestions+=("")
+        suggestions+=("Fix option 2 - Apply and amend:")
+        suggestions+=("  git am --no-verify <patch-file>.patch")
+        suggestions+=("  git commit --amend -m \"feat: apply patch description\"")
+    else
+        error_details="Patch message must follow: <type>: <JIRA-ID> <description>"
+        suggestions+=("Your message: \"$commit_msg\"")
+        suggestions+=("")
+        suggestions+=("Fix option 1 - Interactive mode:")
+        suggestions+=("  git am --abort")
+        suggestions+=("  git am --interactive <patch-file>.patch")
+        suggestions+=("  # Press 'e' to edit message")
+        suggestions+=("")
+        suggestions+=("Fix option 2 - Apply and amend:")
+        suggestions+=("  git am --no-verify <patch-file>.patch")
+        suggestions+=("  git commit --amend -m \"feat: $jira_id apply patch description\"")
+    fi
+    
     suggestions+=("")
     suggestions+=("🔄 Undo applied patch:")
     suggestions+=("  git am --abort        # Before patch is applied")

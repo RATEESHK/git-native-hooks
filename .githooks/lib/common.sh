@@ -43,10 +43,11 @@ readonly COLOR_GRAY='\033[0;90m'
 readonly COLOR_BOLD='\033[1m'
 readonly COLOR_RESET='\033[0m'
 
-# Branch patterns based on Git Flow
+# Branch patterns based on Git Flow (https://nvie.com/posts/a-successful-git-branching-model/)
 readonly PATTERN_MAIN='^main$'
 readonly PATTERN_DEVELOP='^develop$'
-readonly PATTERN_RELEASE='^release($|/.*)$'
+# Release branches: release-1.2.0, release-1.2, release-2.0.0-rc1 (NO JIRA ID required per Git Flow)
+readonly PATTERN_RELEASE='^release-[0-9]+(\.[0-9]+)*(-[a-zA-Z0-9._-]+)?$'
 readonly PATTERN_FEATURE='^(feat|feature)-[A-Z]{2,10}-[0-9]+-[a-z0-9-]+$'
 readonly PATTERN_BUGFIX='^(bugfix|fix)-[A-Z]{2,10}-[0-9]+-[a-z0-9-]+$'
 readonly PATTERN_HOTFIX='^hotfix-[A-Z]{2,10}-[0-9]+-[a-z0-9-]+$'
@@ -282,10 +283,12 @@ get_base_branch() {
             echo ""
             return 1
             ;;
-        release/*)
+        release-*)
+            # Release branches must come from develop (Git Flow)
             echo "develop"
             ;;
         hotfix-*)
+            # Hotfix branches must come from main (Git Flow)
             echo "main"
             ;;
         *)
@@ -452,11 +455,42 @@ get_allowed_bases() {
     esac
 }
 
+# Check if a branch type allows creating new branches FROM it
+# Returns: 0 = allowed, 1 = blocked (release/hotfix), 2 = unusual (feature/bugfix)
+can_branch_from() {
+    local branch_type="$1"
+    
+    case "$branch_type" in
+        main|develop)
+            return 0  # Can create branches from long-lived branches
+            ;;
+        release|hotfix)
+            return 1  # Cannot create branches from release or hotfix
+            ;;
+        feature|bugfix|support)
+            return 2  # Unusual pattern, may indicate dependent features
+            ;;
+        *)
+            return 0  # Unknown types allow (permissive for custom workflows)
+            ;;
+    esac
+}
+
+# Detect if any active release branches exist
+has_active_release() {
+    git branch --list 'release-*' 2>/dev/null | grep -q 'release-'
+}
+
+# Get list of active release branches
+list_active_releases() {
+    git branch --list 'release-*' 2>/dev/null | sed 's/^[* ]*//' || echo ""
+}
+
 # ==============================================================================
 # COMMIT VALIDATION
 # ==============================================================================
 
-# Validate commit message format
+# Validate commit message format (strict - requires JIRA ID)
 validate_commit_message() {
     local message="$1"
     
@@ -471,6 +505,61 @@ validate_commit_message() {
     fi
     
     # Check pattern
+    if [[ "$message" =~ $COMMIT_MSG_PATTERN ]]; then
+        return 0
+    fi
+    
+    return 1
+}
+
+# Validate commit message with branch-aware rules
+# Release branches: JIRA ID is OPTIONAL (soft validation per Git Flow)
+# Other branches: JIRA ID is REQUIRED (strict validation)
+validate_commit_message_for_branch() {
+    local message="$1"
+    local branch="$2"
+    
+    # Allow merge commits (all branches)
+    if [[ "$message" =~ ^Merge ]]; then
+        return 0
+    fi
+    
+    # Allow revert commits (all branches)
+    if [[ "$message" =~ ^Revert ]]; then
+        return 0
+    fi
+    
+    # Get branch type
+    local branch_type
+    branch_type="$(get_branch_type "$branch")"
+    
+    # RELEASE BRANCHES: Flexible validation (JIRA optional)
+    # Per Git Flow: Release branches use version numbers, not JIRA IDs
+    # Allow commits with OR without JIRA IDs
+    if [[ "$branch_type" == "release" ]]; then
+        # Pattern 1: Standard format WITH JIRA ID (feat: JIRA-123 description)
+        if [[ "$message" =~ $COMMIT_MSG_PATTERN ]]; then
+            return 0
+        fi
+        
+        # Pattern 2: Standard format WITHOUT JIRA ID (feat: description)
+        # Allows: feat: description, fix: description, chore: description, etc.
+        if [[ "$message" =~ ^(feat|fix|chore|break|tests|docs|style|refactor|perf|build|ci|release|version): .+ ]]; then
+            return 0
+        fi
+        
+        # Pattern 3: Simple descriptive messages for release tasks
+        # Allows: "Bump version to X.Y.Z", "Update changelog", "Prepare release"
+        if [[ "$message" =~ ^(Bump|Update|Prepare|Release|Version|Finalize) ]]; then
+            return 0
+        fi
+        
+        # If none match, it's still invalid (must have SOME structure)
+        return 1
+    fi
+    
+    # ALL OTHER BRANCHES: Strict validation (JIRA required)
+    # Feature, bugfix, hotfix, support branches MUST have JIRA IDs
     if [[ "$message" =~ $COMMIT_MSG_PATTERN ]]; then
         return 0
     fi
