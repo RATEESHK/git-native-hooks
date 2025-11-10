@@ -414,7 +414,7 @@ main() {
                 # Get the branch we came from via reflog
                 if [[ -n "$prev_branch" ]]; then
                     # Use the already detected prev_branch
-                    if [[ "$prev_branch" =~ ^(main|develop|release-.+)$ ]]; then
+                    if [[ "$prev_branch" =~ ^(main|develop|release-.*)$ ]]; then
                         base_branch="$prev_branch"
                     fi
                 fi
