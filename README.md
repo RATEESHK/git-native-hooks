@@ -1592,19 +1592,30 @@ git push
 Error: Branch has 8 commits (limit: 5). Squash commits before pushing.
 ```
 
-**Solution**:
+**Quick Solution**:
 ```bash
-# Option 1: Squash commits interactively
-git rebase -i develop
-# Mark commits as 'squash' or 'fixup'
-
-# Option 2: Soft reset and recommit
+# Option 1: Soft reset (simplest - recommended)
 git reset --soft develop
 git commit -m "feat: PROJ-123 complete feature description"
+git push --force-with-lease origin feat-PROJ-123
 
-# Option 3: Increase limit (if justified)
+# Option 2: Interactive rebase (more control)
+git rebase -i develop
+# Mark commits as 'squash' or 'fixup', save
+git push --force-with-lease origin feat-PROJ-123
+
+# Option 3: Increase limit temporarily (last resort)
 git config hooks.maxCommits 10
 ```
+
+**For Complete Guide** including:
+- Detailed step-by-step instructions
+- Visual examples of before/after
+- How history is preserved
+- Recovery commands if something goes wrong
+- Best practices for commit messages
+
+**→ See [Section "3. Too Many Commits - Complete Guide"](#3-too-many-commits---complete-guide) in "Error Messages and Fixes"**
 
 #### Issue 7: "Branch name doesn't follow Git Flow"
 
@@ -2477,27 +2488,40 @@ git commit --amend -m "feat: PROJ-123 correct message format"
 Error: Branch has 8 commits (limit: 5). Squash commits before pushing.
 ```
 
-**Solution**:
+**Quick Solution**:
 
 ```bash
-# Option 1: Squash all commits
+# Option 1: Soft reset (simplest - recommended)
 git reset --soft develop
 git commit -m "feat: PROJ-123 complete feature implementation
 
 Detailed description of all changes...
 "
+git push --force-with-lease origin feat-PROJ-123
 
-# Option 2: Interactive rebase
+# Option 2: Interactive rebase (more control)
 git rebase -i develop
 # In editor, change 'pick' to 'squash' for commits to combine
 # Save and close
+git push --force-with-lease origin feat-PROJ-123
 
-# Option 3: Increase limit (if justified)
+# Option 3: Increase limit temporarily (last resort)
 git config hooks.maxCommits 10
-
-# Push (requires force)
-git push --force-with-lease
+git push origin feat-PROJ-123
 ```
+
+**Need More Help?**
+
+For a **complete comprehensive guide** with:
+- ✓ Step-by-step instructions for each method
+- ✓ Visual examples of git log before/after
+- ✓ Detailed explanation of what each command does
+- ✓ How to preserve all your history
+- ✓ Recovery commands if something goes wrong
+- ✓ Comparison table of all methods
+- ✓ Best practices and common pitfalls
+
+**→ See [Complete Guide: "3. Too Many Commits"](#3-too-many-commits---complete-guide) in "Error Messages and Fixes" section**
 
 #### Problem: Branch Created from Wrong Base
 
@@ -8431,7 +8455,7 @@ git reset --soft HEAD~1
 git commit -m "feat: PROJ-123 add new feature"
 ```
 
-#### 3. Too Many Commits
+#### 3. Too Many Commits - Complete Guide
 
 **Error**:
 ```
@@ -8439,19 +8463,570 @@ git commit -m "feat: PROJ-123 add new feature"
 Branch has 8 commits (limit: 5). Squash commits before pushing.
 ```
 
-**Fix**:
+**Why This Limit Exists**:
+- Easier code review (reviewers can focus on final changes)
+- Cleaner git history (less noise, easier navigation)
+- Simpler reverts (one commit to revert entire feature)
+- Faster git operations (fewer commits to process)
+- Encourages thoughtful commit organization
+
+**Understanding Your Options**:
+
+There are **three main approaches** to handle too many commits. Choose based on your needs:
+
+1. **Soft Reset** (Easiest - Recommended for most cases)
+   - Combines all commits into one
+   - Preserves ALL your changes
+   - Simple, fast, no conflicts
+   - Best when: You want a single clean commit
+
+2. **Interactive Rebase** (More Control)
+   - Choose which commits to combine
+   - Can keep some commits separate
+   - Edit commit messages individually
+   - Best when: You want to preserve some commit separation
+
+3. **Increase Limit** (Last Resort)
+   - Keeps all commits as-is
+   - Only use if truly necessary
+   - Should be temporary
+   - Best when: Complex feature genuinely needs more commits
+
+---
+
+### Option 1: Soft Reset (Recommended - Simplest)
+
+**What It Does**:
+- Moves branch pointer back to base (develop)
+- Keeps ALL your file changes staged
+- You create ONE new commit with all changes
+- **All history is preserved** in reflog (recoverable)
+
+**Step-by-Step Instructions**:
+
 ```bash
-# Interactive rebase
-git rebase -i develop
-# Mark commits as 'squash', save and exit
+# 1. Check your current state (BEFORE doing anything)
+git log --oneline
+# Output:
+# a1b2c3d (HEAD -> feat-PROJ-123-add-auth) feat: PROJ-123 fix typo
+# e4f5g6h feat: PROJ-123 add tests
+# i7j8k9l feat: PROJ-123 update docs
+# m0n1o2p feat: PROJ-123 refactor code
+# q3r4s5t feat: PROJ-123 implement auth
+# u6v7w8x (origin/develop, develop) chore: update dependencies
+# ... (older commits)
 
-# Or soft reset (simpler)
+# 2. Soft reset to develop (your base branch)
 git reset --soft develop
-git commit -m "feat: PROJ-123 complete feature description"
 
-# Force-push with safety
-git push --force-with-lease origin feat-PROJ-123
+# What happened:
+# - Branch pointer moved to develop
+# - All 5 commits "disappeared" from git log
+# - BUT all changes are still staged (ready to commit)
+
+# 3. Verify changes are staged
+git status
+# Output:
+# On branch feat-PROJ-123-add-auth
+# Changes to be committed:
+#   (use "git restore --staged <file>..." to unstage)
+#         modified:   src/auth.js
+#         new file:   src/auth.test.js
+#         modified:   docs/auth.md
+#         modified:   src/config.js
+
+# All your changes are here, ready to commit!
+
+# 4. Create ONE comprehensive commit
+git commit -m "feat: PROJ-123 implement user authentication system
+
+Complete authentication implementation including:
+- JWT token generation and validation
+- User login and registration endpoints  
+- Password hashing with bcrypt
+- Session management
+- Unit tests with 95% coverage
+- API documentation updated
+
+Closes PROJ-123
+"
+
+# Pro tip: Use multi-line commit message for better description
+# First line: Short summary (50 chars max)
+# Blank line
+# Body: Detailed explanation (bullet points work well)
+
+# 5. Verify the result
+git log --oneline -3
+# Output:
+# a1b2c3d (HEAD -> feat-PROJ-123-add-auth) feat: PROJ-123 implement user authentication system
+# u6v7w8x (origin/develop, develop) chore: update dependencies
+# ... (older commits)
+
+# Perfect! Now you have 1 commit instead of 5
+
+# 6. Push to remote (requires force since you rewrote history)
+git push --force-with-lease origin feat-PROJ-123-add-auth
+
+# Why --force-with-lease?
+# - Safer than --force
+# - Prevents overwriting if someone else pushed
+# - Fails if remote has commits you don't have locally
 ```
+
+**What If You Make a Mistake?**
+
+Don't panic! Your old commits are still in reflog:
+
+```bash
+# View reflog (shows all previous states)
+git reflog
+# Output:
+# a1b2c3d HEAD@{0}: commit: feat: PROJ-123 implement user authentication system
+# u6v7w8x HEAD@{1}: reset: moving to develop
+# q3r4s5t HEAD@{2}: commit: feat: PROJ-123 fix typo
+# e4f5g6h HEAD@{3}: commit: feat: PROJ-123 add tests
+# ... (all previous commits are here!)
+
+# To undo soft reset and get back your 5 commits:
+git reset --hard HEAD@{1}
+# This moves you back to BEFORE the soft reset
+
+# Alternative: If you committed but want original 5 commits back:
+git reflog
+git reset --hard HEAD@{2}  # Go back to before soft reset
+
+# Your original commits are safe for ~30 days in reflog!
+```
+
+---
+
+### Option 2: Interactive Rebase (More Control)
+
+**What It Does**:
+- Opens editor with list of commits
+- You choose what to do with each commit:
+  - `pick` = keep commit as-is
+  - `squash` = merge with previous commit (keep commit message)
+  - `fixup` = merge with previous commit (discard commit message)
+  - `reword` = keep commit but edit message
+  - `edit` = stop to amend commit
+  - `drop` = remove commit entirely
+
+**When to Use**:
+- Want to keep some commits separate
+- Need to reword commit messages
+- Want to drop certain commits
+- More complex history cleanup
+
+**Step-by-Step Instructions**:
+
+```bash
+# 1. Check your commits
+git log --oneline
+# Output:
+# a1b2c3d (HEAD -> feat-PROJ-123-add-auth) feat: PROJ-123 fix typo
+# e4f5g6h feat: PROJ-123 add tests  
+# i7j8k9l feat: PROJ-123 update docs
+# m0n1o2p feat: PROJ-123 refactor code
+# q3r4s5t feat: PROJ-123 implement auth
+# u6v7w8x (origin/develop, develop) chore: update dependencies
+
+# 2. Start interactive rebase
+git rebase -i develop
+
+# Editor opens with:
+pick q3r4s5t feat: PROJ-123 implement auth
+pick m0n1o2p feat: PROJ-123 refactor code
+pick i7j8k9l feat: PROJ-123 update docs
+pick e4f5g6h feat: PROJ-123 add tests
+pick a1b2c3d feat: PROJ-123 fix typo
+
+# Rebase u6v7w8x..a1b2c3d onto u6v7w8x (5 commands)
+#
+# Commands:
+# p, pick <commit> = use commit
+# r, reword <commit> = use commit, but edit the commit message
+# e, edit <commit> = use commit, but stop for amending
+# s, squash <commit> = use commit, but meld into previous commit
+# f, fixup <commit> = like "squash", but discard this commit's log message
+# d, drop <commit> = remove commit
+
+# 3. Edit the file to squash commits
+# Change to:
+pick q3r4s5t feat: PROJ-123 implement auth
+squash m0n1o2p feat: PROJ-123 refactor code
+squash i7j8k9l feat: PROJ-123 update docs
+squash e4f5g6h feat: PROJ-123 add tests
+squash a1b2c3d feat: PROJ-123 fix typo
+
+# What this does:
+# - Keeps first commit (pick)
+# - Merges all others into first commit (squash)
+# - You'll edit the final commit message next
+
+# 4. Save and close editor (in vi: press ESC, type :wq, press ENTER)
+
+# 5. Next editor opens with combined commit message
+# This is the combined commit message for all squashed commits
+feat: PROJ-123 implement auth
+feat: PROJ-123 refactor code
+feat: PROJ-123 update docs
+feat: PROJ-123 add tests
+feat: PROJ-123 fix typo
+
+# Edit to create one clean message:
+feat: PROJ-123 implement user authentication system
+
+Complete authentication implementation:
+- JWT token generation and validation
+- User login and registration endpoints
+- Password hashing with bcrypt
+- Session management with Redis
+- Comprehensive unit tests (95% coverage)
+- API documentation updated
+
+Closes PROJ-123
+
+# 6. Save and close editor
+
+# 7. Verify result
+git log --oneline -3
+# Output:
+# z9y8x7w (HEAD -> feat-PROJ-123-add-auth) feat: PROJ-123 implement user authentication system
+# u6v7w8x (origin/develop, develop) chore: update dependencies
+
+# Perfect! 5 commits squashed into 1
+
+# 8. Push with force
+git push --force-with-lease origin feat-PROJ-123-add-auth
+```
+
+**Advanced Interactive Rebase Examples**:
+
+**Example 1: Keep 2 commits, squash rest**
+```bash
+# Before: 5 commits
+# After: 2 commits (implementation + tests separate)
+
+pick q3r4s5t feat: PROJ-123 implement auth
+squash m0n1o2p feat: PROJ-123 refactor code
+pick e4f5g6h feat: PROJ-123 add tests
+squash i7j8k9l feat: PROJ-123 update test docs
+fixup a1b2c3d feat: PROJ-123 fix test typo
+
+# Result: 2 commits
+# 1. feat: PROJ-123 implement auth (includes refactor)
+# 2. feat: PROJ-123 add tests (includes docs and typo fix)
+```
+
+**Example 2: Drop unnecessary commits**
+```bash
+pick q3r4s5t feat: PROJ-123 implement auth
+drop m0n1o2p feat: PROJ-123 debug logging (not needed)
+pick i7j8k9l feat: PROJ-123 update docs
+drop e4f5g6h feat: PROJ-123 temp commit (remove)
+pick a1b2c3d feat: PROJ-123 add tests
+
+# Dropped commits are completely removed
+```
+
+**Example 3: Reword commit messages**
+```bash
+pick q3r4s5t feat: PROJ-123 implement auth
+reword m0n1o2p feat: PROJ-123 refactor code
+pick i7j8k9l feat: PROJ-123 update docs
+
+# Rebase will stop at 'reword' commits
+# You can edit the commit message
+# Then continues automatically
+```
+
+**If Rebase Goes Wrong**:
+
+```bash
+# Abort rebase (go back to before rebase)
+git rebase --abort
+
+# You're back to original state, no harm done!
+
+# If you already finished rebase and want to undo:
+git reflog
+git reset --hard HEAD@{1}  # Go back to before rebase
+```
+
+---
+
+### Option 3: Increase Commit Limit (Last Resort)
+
+**When to Use**:
+- Complex feature with genuinely distinct phases
+- Each commit represents a complete, reviewable unit
+- Team agrees more commits are justified
+- Temporary - will lower limit after push
+
+**Considerations**:
+- ⚠️ Makes code review harder (more commits to check)
+- ⚠️ Clutters git history
+- ⚠️ May indicate feature should be split into smaller features
+- ✅ Acceptable for releases, large refactors, migrations
+
+**Instructions**:
+
+```bash
+# 1. Increase limit (local to this repo)
+git config hooks.maxCommits 10
+
+# 2. Push your branch
+git push origin feat-PROJ-123-add-auth
+
+# 3. After push, consider lowering back
+git config hooks.maxCommits 5
+
+# Global setting (all repos):
+git config --global hooks.maxCommits 10
+
+# View current setting:
+git config hooks.maxCommits
+```
+
+**Better Alternative**:
+Instead of increasing limit, consider splitting feature:
+
+```bash
+# Instead of 8 commits on one branch:
+feat-PROJ-123-implement-auth (8 commits)
+
+# Split into multiple PRs:
+feat-PROJ-123-auth-models (3 commits → squashed to 1)
+feat-PROJ-123-auth-api (3 commits → squashed to 1)  
+feat-PROJ-123-auth-tests (2 commits → squashed to 1)
+
+# Benefits:
+# ✓ Each PR easier to review
+# ✓ Can merge incrementally
+# ✓ Each meets commit limit
+# ✓ Clearer feature progression
+```
+
+---
+
+### Comparison: Which Method to Choose?
+
+| Method | Pros | Cons | Best For |
+|--------|------|------|----------|
+| **Soft Reset** | • Simplest<br>• Fast<br>• No conflicts<br>• Easy to undo | • Loses individual commit messages<br>• Creates one large commit | • Most features<br>• Quick fixes<br>• Beginners |
+| **Interactive Rebase** | • Full control<br>• Keep some commits<br>• Edit messages<br>• Drop commits | • More complex<br>• Possible conflicts<br>• Steeper learning curve | • Complex features<br>• Need multiple commits<br>• Advanced users |
+| **Increase Limit** | • No history change<br>• Keep all commits | • Harder review<br>• Cluttered history<br>• Quick fix, not solution | • Rare justified cases<br>• Temporary only |
+
+---
+
+### Common Issues and Solutions
+
+**Issue: "Already pushed branch, now can't push after squash"**
+```bash
+# Error:
+# ! [rejected] feat-PROJ-123-add-auth -> feat-PROJ-123-add-auth (non-fast-forward)
+
+# Solution: Use --force-with-lease
+git push --force-with-lease origin feat-PROJ-123-add-auth
+
+# Why --force-with-lease?
+# ✓ Safe: Checks remote hasn't changed
+# ✗ --force: Blindly overwrites (dangerous!)
+```
+
+**Issue: "Lost my original commits after squash!"**
+```bash
+# Don't panic! Commits are in reflog for ~30 days
+
+# 1. Find your commits
+git reflog
+# Look for your commits (before squash)
+
+# 2. Go back to that state
+git reset --hard HEAD@{N}  # Replace N with number from reflog
+
+# 3. Start over with squashing
+```
+
+**Issue: "Squashed commits but made typo in commit message"**
+```bash
+# Fix with amend
+git commit --amend -m "feat: PROJ-123 correct message"
+
+# Then push
+git push --force-with-lease origin feat-PROJ-123-add-auth
+```
+
+**Issue: "Rebase conflicts during interactive rebase"**
+```bash
+# Rebase paused with conflicts
+
+# 1. See conflicted files
+git status
+
+# 2. Resolve conflicts in editor
+# Edit files, remove conflict markers (<<<<, ====, >>>>)
+
+# 3. Stage resolved files
+git add <resolved-files>
+
+# 4. Continue rebase
+git rebase --continue
+
+# 5. Repeat for each conflict
+
+# Or abort if too complex:
+git rebase --abort
+# Use soft reset instead (simpler)
+```
+
+**Issue: "Accidentally squashed wrong commits"**
+```bash
+# Undo with reflog
+git reflog
+git reset --hard HEAD@{N}  # Go back before squash
+
+# Alternative: Cherry-pick specific commits
+git checkout develop
+git checkout -b feat-PROJ-123-fixed develop
+git cherry-pick <commit1> <commit2>  # Pick specific commits
+```
+
+---
+
+### Best Practices
+
+**Before Squashing**:
+1. ✓ **Ensure branch is up to date** with base:
+   ```bash
+   git fetch origin
+   git rebase origin/develop  # Update first
+   git push --force-with-lease origin feat-PROJ-123  # Then squash
+   ```
+
+2. ✓ **Backup branch** (optional but safe):
+   ```bash
+   git branch feat-PROJ-123-backup  # Create backup
+   # Do squashing on original branch
+   # If goes wrong: git reset --hard feat-PROJ-123-backup
+   ```
+
+3. ✓ **Check what you're squashing**:
+   ```bash
+   git log develop..HEAD --oneline  # See commits to squash
+   git diff develop..HEAD  # See all changes
+   ```
+
+**Commit Message Best Practices**:
+```bash
+# Good commit message structure:
+feat: PROJ-123 short summary (50 chars max)
+
+Detailed explanation of what and why (not how).
+Wrap at 72 characters per line.
+
+- Bullet points for multiple changes
+- Each point describes a specific change
+- Why decisions were made
+
+Technical details:
+- Technology choices
+- Performance considerations  
+- Breaking changes (if any)
+
+Closes PROJ-123
+Related: PROJ-100, PROJ-200
+```
+
+**After Squashing**:
+1. ✓ **Verify changes didn't get lost**:
+   ```bash
+   git diff develop  # Should show all your changes
+   ```
+
+2. ✓ **Run tests before pushing**:
+   ```bash
+   npm test  # or your test command
+   git push --force-with-lease origin feat-PROJ-123
+   ```
+
+3. ✓ **Update PR description**:
+   - Update PR with new commit message
+   - Explain squashing (if reviewers saw multiple commits)
+   - Re-request review if needed
+
+---
+
+### Visual Example: Before and After Squashing
+
+**Before Squashing (8 commits)**:
+```
+* a1b2c3d (HEAD -> feat-PROJ-123) feat: PROJ-123 fix typo
+* e4f5g6h feat: PROJ-123 add more tests
+* i7j8k9l feat: PROJ-123 update docs  
+* m0n1o2p feat: PROJ-123 refactor auth
+* q3r4s5t feat: PROJ-123 add tests
+* u6v7w8x feat: PROJ-123 implement login
+* y9z0a1b feat: PROJ-123 implement register
+* c2d3e4f feat: PROJ-123 add auth models
+| * f5g6h7i (origin/develop, develop) chore: update deps
+|/
+```
+
+**After Soft Reset Squash (1 commit)**:
+```
+* z9y8x7w (HEAD -> feat-PROJ-123) feat: PROJ-123 implement user authentication system
+| * f5g6h7i (origin/develop, develop) chore: update deps
+|/
+```
+
+**All 8 commits' changes are in the single commit - nothing lost!**
+
+**Verify with**:
+```bash
+# Show what's in the squashed commit
+git show HEAD
+
+# Compare squashed commit to base
+git diff develop..HEAD
+# Should show ALL your changes from all 8 original commits
+```
+
+---
+
+### Recovery Commands Summary
+
+Keep these handy - they save you if something goes wrong:
+
+```bash
+# View reflog (all previous states)
+git reflog
+
+# Go back to previous state
+git reset --hard HEAD@{N}  # Replace N with reflog number
+
+# Abort interactive rebase
+git rebase --abort
+
+# Abort merge
+git merge --abort
+
+# Discard uncommitted changes
+git restore .
+
+# Unstage all changes
+git restore --staged .
+
+# Create backup branch before risky operation
+git branch backup-branch-name
+
+# View what would be pushed (dry run)
+git push --dry-run origin feat-PROJ-123
+```
+
+Remember: **Git rarely loses data**. Even "deleted" commits stay in reflog for ~30 days. Don't panic, check reflog!
 
 #### 4. Non-Linear History (Merge Commits)
 
