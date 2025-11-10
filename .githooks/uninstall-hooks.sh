@@ -25,6 +25,7 @@ set -euo pipefail
 readonly GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo ".")"
 readonly LOG_DIR="${GIT_ROOT}/.git/hooks-logs"
 readonly ARCHIVE_DIR="${GIT_ROOT}/.git/hooks-logs-archive"
+readonly SESSION_MARKERS_PATTERN="${GIT_ROOT}/.git/.bypass-warned-*"
 
 # Color codes
 readonly COLOR_RED='\033[0;31m'
@@ -78,8 +79,9 @@ confirm_uninstall() {
     print_color "$COLOR_WHITE" "  • core.hooksPath configuration"
     print_color "$COLOR_WHITE" "  • rebase.autosquash configuration"
     print_color "$COLOR_WHITE" "  • fetch.prune configuration"
-    print_color "$COLOR_WHITE" "  • hooks.* configurations"
+    print_color "$COLOR_WHITE" "  • hooks.* configurations (including bypassWarningStyle)"
     print_color "$COLOR_WHITE" "  • branch.*.base configurations"
+    print_color "$COLOR_WHITE" "  • Bypass warning session markers"
     echo ""
     print_color "$COLOR_WHITE" "Logs will be archived to:"
     print_color "$COLOR_WHITE" "  $ARCHIVE_DIR"
@@ -120,7 +122,33 @@ archive_logs() {
     fi
 }
 
-# Step 2: Remove Git configurations
+# Step 2: Clean bypass warning session markers
+clean_session_markers() {
+    print_color "$COLOR_CYAN" "Cleaning bypass warning session markers..."
+    
+    local marker_count=0
+    # Use bash glob to find session marker files
+    shopt -s nullglob
+    local markers=("${GIT_ROOT}/.git/.bypass-warned-"*)
+    shopt -u nullglob
+    
+    if [[ ${#markers[@]} -gt 0 ]]; then
+        for marker in "${markers[@]}"; do
+            if [[ -f "$marker" ]]; then
+                rm -f "$marker" 2>/dev/null || true
+                ((marker_count++))
+            fi
+        done
+        
+        if [[ $marker_count -gt 0 ]]; then
+            print_success "Removed $marker_count bypass warning session marker(s)"
+        fi
+    else
+        print_color "$COLOR_CYAN" "No bypass warning session markers found"
+    fi
+}
+
+# Step 3: Remove Git configurations
 remove_configurations() {
     print_color "$COLOR_CYAN" "Removing Git configurations..."
     
@@ -141,20 +169,32 @@ remove_configurations() {
         print_success "Removed fetch.prune"
     fi
     
-    # Remove hooks configurations
-    for key in $(git config --get-regexp '^hooks\.' | awk '{print $1}'); do
-        git config --unset "$key"
+    # Remove hooks configurations (including hooks.bypassWarningStyle)
+    local hooks_config_count=0
+    for key in $(git config --get-regexp '^hooks\.' 2>/dev/null | awk '{print $1}'); do
+        git config --unset "$key" 2>/dev/null || true
         print_success "Removed $key"
+        ((hooks_config_count++))
     done
     
+    if [[ $hooks_config_count -eq 0 ]]; then
+        print_color "$COLOR_CYAN" "No hooks.* configurations found"
+    fi
+    
     # Remove branch base configurations
-    for key in $(git config --get-regexp '^branch\..*\.base$' | awk '{print $1}'); do
-        git config --unset "$key"
+    local branch_config_count=0
+    for key in $(git config --get-regexp '^branch\..*\.base$' 2>/dev/null | awk '{print $1}'); do
+        git config --unset "$key" 2>/dev/null || true
         print_success "Removed $key"
+        ((branch_config_count++))
     done
+    
+    if [[ $branch_config_count -eq 0 ]]; then
+        print_color "$COLOR_CYAN" "No branch.*.base configurations found"
+    fi
 }
 
-# Step 3: Display summary
+# Step 4: Display summary
 display_summary() {
     print_header "Uninstallation Complete"
     
@@ -162,9 +202,10 @@ display_summary() {
     echo ""
     
     print_color "$COLOR_CYAN" "What was removed:"
-    print_color "$COLOR_WHITE" "  • All hook configurations"
-    print_color "$COLOR_WHITE" "  • Workflow settings"
-    print_color "$COLOR_WHITE" "  • Branch tracking"
+    print_color "$COLOR_WHITE" "  • All hook configurations (hooks.maxCommits, hooks.bypassWarningStyle, etc.)"
+    print_color "$COLOR_WHITE" "  • Workflow settings (rebase.autosquash, fetch.prune)"
+    print_color "$COLOR_WHITE" "  • Branch tracking (branch.*.base)"
+    print_color "$COLOR_WHITE" "  • Bypass warning session markers"
     echo ""
     
     print_color "$COLOR_CYAN" "What remains:"
@@ -192,6 +233,7 @@ main() {
     
     # Uninstallation steps
     archive_logs
+    clean_session_markers
     remove_configurations
     
     # Summary

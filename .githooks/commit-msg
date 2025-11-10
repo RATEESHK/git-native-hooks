@@ -35,6 +35,9 @@ readonly HOOK_NAME="commit-msg"
 main() {
     local commit_msg_file="$1"
     
+    # Display strong warning if bypass mechanisms are active (BEFORE any logic)
+    warn_if_bypass_active "$HOOK_NAME"
+    
     log_to_file "INFO" "$HOOK_NAME" "Hook execution started"
     
     # Check for global bypass

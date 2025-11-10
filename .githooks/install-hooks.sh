@@ -138,6 +138,12 @@ configure_git_settings() {
         print_success "Set hooks.maxCommits to 5"
     fi
     
+    # Initialize bypass warning style if not set (default: compact for minimal clutter)
+    if ! git config hooks.bypassWarningStyle >/dev/null 2>&1; then
+        git config hooks.bypassWarningStyle compact
+        print_success "Set hooks.bypassWarningStyle to compact"
+    fi
+    
     # Set base branches for tracking
     local current_branch
     current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")

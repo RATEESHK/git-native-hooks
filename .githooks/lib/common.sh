@@ -251,6 +251,161 @@ log_bypass() {
     print_warning "Hook bypassed: $bypass_type"
 }
 
+# Display bypass warning based on configuration
+# This function is called at the start of EVERY hook to ensure visibility
+# Configurable via: git config hooks.bypassWarningStyle [compact|full|once]
+warn_if_bypass_active() {
+    local hook_name="${1:-UNKNOWN}"
+    local bypass_active=false
+    local bypass_details=()
+    
+    # Check if BYPASS_HOOKS is enabled
+    if should_bypass_hooks; then
+        bypass_active=true
+        bypass_details+=("BYPASS_HOOKS=1")
+    fi
+    
+    # Check if ALLOW_DIRECT_PROTECTED is enabled
+    if should_allow_protected; then
+        bypass_active=true
+        bypass_details+=("ALLOW_DIRECT_PROTECTED=1")
+    fi
+    
+    # If no bypass is active, return silently
+    if [[ "$bypass_active" == "false" ]]; then
+        return 0
+    fi
+    
+    # Log the bypass usage (always log for audit trail)
+    for bypass in "${bypass_details[@]}"; do
+        log_to_file "WARNING" "$hook_name" "BYPASS ACTIVE: $bypass (user: $(whoami))"
+    done
+    
+    # Get warning style from configuration (default: compact)
+    # Options: compact, full, once
+    local warning_style
+    warning_style=$(git config hooks.bypassWarningStyle 2>/dev/null || echo "compact")
+    
+    # Session marker for "once" style - use PPID to track terminal session, not hook PID
+    # On Windows, /tmp might not exist, use .git directory instead
+    local session_id="${PPID:-$$}"
+    local warning_marker=".git/.bypass-warned-${session_id}"
+    
+    case "$warning_style" in
+        compact)
+            # Always show compact one-line warning
+            show_compact_bypass_warning "${bypass_details[@]}"
+            ;;
+        full)
+            # Always show full detailed warning
+            show_full_bypass_warning "${bypass_details[@]}"
+            ;;
+        once|*)
+            # Show full warning once per session, then compact
+            if [[ ! -f "$warning_marker" ]]; then
+                # First time - show full warning
+                show_full_bypass_warning "${bypass_details[@]}"
+                # Mark as warned
+                touch "$warning_marker" 2>/dev/null || true
+            else
+                # Already warned - show compact reminder
+                show_compact_bypass_warning "${bypass_details[@]}"
+            fi
+            ;;
+    esac
+}
+
+# Show compact one-line bypass warning
+show_compact_bypass_warning() {
+    local bypass_details=("$@")
+    local bypass_list="${bypass_details[*]}"
+    local first_bypass="${bypass_details[0]%%=*}"
+    
+    # One-line compact warning with emphasis on critical changes only
+    printf "${COLOR_RED}${COLOR_BOLD}⚠️  BYPASS ACTIVE:${COLOR_RESET} ${COLOR_YELLOW}%s${COLOR_RESET} ${COLOR_GRAY}(${COLOR_RED}${COLOR_BOLD}Only for critical changes!${COLOR_RESET}${COLOR_GRAY} Disable: ${COLOR_WHITE}unset %s${COLOR_GRAY})${COLOR_RESET}\n" "$bypass_list" "$first_bypass" >&2
+}
+
+# Show full detailed bypass warning with all explanations
+show_full_bypass_warning() {
+    local bypass_details=("$@")
+    
+    echo "" >&2
+    printf "${COLOR_BOLD}${COLOR_RED}" >&2
+    printf "╔══════════════════════════════════════════════════════════════════════════════╗\n" >&2
+    printf "║                                                                              ║\n" >&2
+    printf "║                      ⚠️  CRITICAL SECURITY WARNING ⚠️                         ║\n" >&2
+    printf "║                                                                              ║\n" >&2
+    printf "╚══════════════════════════════════════════════════════════════════════════════╝\n" >&2
+    printf "${COLOR_RESET}" >&2
+    echo "" >&2
+    
+    printf "${COLOR_YELLOW}${COLOR_BOLD}🚨 GIT HOOKS BYPASS MECHANISM IS ACTIVE 🚨${COLOR_RESET}\n" >&2
+    echo "" >&2
+    
+    printf "${COLOR_RED}${COLOR_BOLD}Active Bypass Mechanisms:${COLOR_RESET}\n" >&2
+    for bypass in "${bypass_details[@]}"; do
+        printf "  ${COLOR_RED}● %s${COLOR_RESET}\n" "$bypass" >&2
+    done
+    echo "" >&2
+    
+    # Explain what each bypass does
+    if should_bypass_hooks; then
+        printf "${COLOR_YELLOW}BYPASS_HOOKS=1 means:${COLOR_RESET}\n" >&2
+        printf "  ${COLOR_GRAY}• ALL hook validations are SKIPPED${COLOR_RESET}\n" >&2
+        printf "  ${COLOR_GRAY}• Branch naming: NOT enforced${COLOR_RESET}\n" >&2
+        printf "  ${COLOR_GRAY}• Git Flow rules: NOT enforced${COLOR_RESET}\n" >&2
+        printf "  ${COLOR_GRAY}• Commit messages: NOT validated${COLOR_RESET}\n" >&2
+        printf "  ${COLOR_GRAY}• Commit count limits: NOT enforced${COLOR_RESET}\n" >&2
+        printf "  ${COLOR_GRAY}• Linear history: NOT enforced${COLOR_RESET}\n" >&2
+        printf "  ${COLOR_GRAY}• Custom commands: NOT executed${COLOR_RESET}\n" >&2
+        echo "" >&2
+    fi
+    
+    if should_allow_protected; then
+        printf "${COLOR_YELLOW}ALLOW_DIRECT_PROTECTED=1 means:${COLOR_RESET}\n" >&2
+        printf "  ${COLOR_GRAY}• Direct commits to 'main' branch: ALLOWED${COLOR_RESET}\n" >&2
+        printf "  ${COLOR_GRAY}• Direct commits to 'develop' branch: ALLOWED${COLOR_RESET}\n" >&2
+        printf "  ${COLOR_GRAY}• Protected branch pushes: ALLOWED${COLOR_RESET}\n" >&2
+        printf "  ${COLOR_GRAY}• Pull Request process: BYPASSED${COLOR_RESET}\n" >&2
+        echo "" >&2
+    fi
+    
+    printf "${COLOR_RED}${COLOR_BOLD}⚠️  WARNING: These bypasses should ONLY be used for:${COLOR_RESET}\n" >&2
+    printf "  ${COLOR_YELLOW}1. Emergency production fixes (hotfixes)${COLOR_RESET}\n" >&2
+    printf "  ${COLOR_YELLOW}2. Critical incidents requiring immediate action${COLOR_RESET}\n" >&2
+    printf "  ${COLOR_YELLOW}3. One-time administrative tasks${COLOR_RESET}\n" >&2
+    echo "" >&2
+    
+    printf "${COLOR_RED}${COLOR_BOLD}⚠️  DISABLE IMMEDIATELY after your emergency action is complete!${COLOR_RESET}\n" >&2
+    echo "" >&2
+    
+    printf "${COLOR_CYAN}${COLOR_BOLD}To disable bypass mechanisms:${COLOR_RESET}\n" >&2
+    
+    if should_bypass_hooks; then
+        printf "  ${COLOR_WHITE}unset BYPASS_HOOKS${COLOR_RESET}      # For current shell session\n" >&2
+        printf "  ${COLOR_GRAY}# Or in Windows cmd.exe:${COLOR_RESET}\n" >&2
+        printf "  ${COLOR_WHITE}set BYPASS_HOOKS=${COLOR_RESET}        # Remove variable\n" >&2
+        echo "" >&2
+    fi
+    
+    if should_allow_protected; then
+        printf "  ${COLOR_WHITE}unset ALLOW_DIRECT_PROTECTED${COLOR_RESET}  # For current shell session\n" >&2
+        printf "  ${COLOR_GRAY}# Or in Windows cmd.exe:${COLOR_RESET}\n" >&2
+        printf "  ${COLOR_WHITE}set ALLOW_DIRECT_PROTECTED=${COLOR_RESET}   # Remove variable\n" >&2
+        echo "" >&2
+    fi
+    
+    printf "${COLOR_RED}${COLOR_BOLD}⚠️  DO NOT use bypasses for regular development work!${COLOR_RESET}\n" >&2
+    printf "${COLOR_GRAY}    Bypasses exist for emergencies only - misuse can compromise code quality.${COLOR_RESET}\n" >&2
+    echo "" >&2
+    
+    printf "${COLOR_GRAY}ℹ️  To change warning style: ${COLOR_WHITE}git config hooks.bypassWarningStyle [compact|full|once]${COLOR_RESET}\n" >&2
+    printf "${COLOR_GRAY}   • compact: Always show one-line warning (default - minimal clutter)${COLOR_RESET}\n" >&2
+    printf "${COLOR_GRAY}   • full:    Always show detailed warning (maximum visibility)${COLOR_RESET}\n" >&2
+    printf "${COLOR_GRAY}   • once:    Show detailed warning once per session, then compact${COLOR_RESET}\n" >&2
+    echo "" >&2
+}
+
 # ==============================================================================
 # BRANCH DETECTION & VALIDATION
 # ==============================================================================

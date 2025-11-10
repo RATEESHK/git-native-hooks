@@ -32,10 +32,14 @@ readonly HOOK_NAME="post-rewrite"
 main() {
     local rewrite_type="$1"
     
+    # Display strong warning if bypass mechanisms are active (BEFORE any logic)
+    warn_if_bypass_active "$HOOK_NAME"
+    
     log_to_file "INFO" "$HOOK_NAME" "Hook execution started (type: $rewrite_type)"
     
     # Check for global bypass
     if should_bypass_hooks; then
+        log_bypass "$HOOK_NAME" "Hook bypassed via BYPASS_HOOKS"
         exit 0
     fi
     

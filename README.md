@@ -7745,6 +7745,10 @@ Fix option 2 - Apply and amend:
 # Maximum commits allowed per branch (default: 5)
 git config hooks.maxCommits 10
 
+# Bypass warning display style (default: compact)
+# Options: compact, full, once
+git config hooks.bypassWarningStyle compact
+
 # Auto-stage files after commands fix them (default: false)
 git config hooks.autoAddAfterFix true
 
@@ -7753,6 +7757,36 @@ git config hooks.parallelExecution true
 
 # Set base branch for current branch
 git config branch.$(git branch --show-current).base develop
+```
+
+#### Bypass Warning Styles
+
+When `BYPASS_HOOKS` or `ALLOW_DIRECT_PROTECTED` is set, warnings are displayed:
+
+- **`compact`** (default): Always show one-line warning
+  - All commands: `⚠️  BYPASS ACTIVE: BYPASS_HOOKS=1 (Only for critical changes! Disable: unset BYPASS_HOOKS)`
+  - Best for: Minimal terminal clutter while maintaining visibility
+  - Recommended: For most teams to reduce noise during emergency fixes
+
+- **`full`**: Always show detailed warning
+  - All commands: Full warning box with detailed explanations
+  - Best for: Maximum security awareness and first-time bypass users
+  
+- **`once`**: Show detailed warning once per terminal session, then compact reminders
+  - First command: Full detailed warning with all explanations
+  - Subsequent commands: One-line compact warning
+  - Best for: Emergency work that requires multiple commands with context
+
+Example configuration:
+```bash
+# For minimal clutter (default, recommended)
+git config hooks.bypassWarningStyle compact
+
+# For maximum visibility (detailed warnings)
+git config hooks.bypassWarningStyle full
+
+# For emergency hotfix work (detailed once, then compact)
+git config hooks.bypassWarningStyle once
 ```
 
 ### View Current Configuration
