@@ -96,8 +96,8 @@ main() {
         
         # Check if we can branch from the previous branch
         local can_branch_result
-        can_branch_from "$prev_branch_type"
-        can_branch_result=$?
+        can_branch_from "$prev_branch_type" || can_branch_result=$?
+        can_branch_result=${can_branch_result:-0}
         
         # Block if branching from release or hotfix (return code 1)
         if [[ $can_branch_result -eq 1 ]]; then

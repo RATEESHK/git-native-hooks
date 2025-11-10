@@ -187,8 +187,8 @@ validate_branch_base() {
         base_branch_type="$(get_branch_type "$base_branch")"
         
         local can_branch_result
-        can_branch_from "$base_branch_type"
-        can_branch_result=$?
+        can_branch_from "$base_branch_type" || can_branch_result=$?
+        can_branch_result=${can_branch_result:-0}
         
         if [[ $can_branch_result -eq 1 ]]; then
             local error_details="Branch '$branch' was created from a $base_branch_type branch, which violates Git Flow."
