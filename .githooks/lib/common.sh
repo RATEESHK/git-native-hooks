@@ -429,26 +429,27 @@ get_base_branch() {
     
     # Determine base from branch type
     case "$current_branch" in
-        main|master)
+        main|master|develop)
+            # Long-lived branches don't have a base branch
+            # Return success (0) but echo empty string
+            # This prevents script failure when using set -e
             echo ""
-            return 1
-            ;;
-        develop)
-            # develop is a long-lived branch, not created from main
-            echo ""
-            return 1
+            return 0
             ;;
         release-*)
             # Release branches must come from develop (Git Flow)
             echo "develop"
+            return 0
             ;;
         hotfix-*)
             # Hotfix branches must come from main (Git Flow)
             echo "main"
+            return 0
             ;;
         *)
             # Feature, bugfix, and other branches come from develop
             echo "develop"
+            return 0
             ;;
     esac
 }
