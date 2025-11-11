@@ -67,19 +67,23 @@ main() {
     
     log_to_file "INFO" "$HOOK_NAME" "Checked out branch: $current_branch"
     
-    # Detect if this is a new branch creation (prev_head will be same as new_head's parent)
+    # Detect if this is a new branch creation vs. switching to existing branch
     local is_new_branch=false
     local prev_branch=""
     
-    # Check if this is a branch creation by examining git reflog
+    # Get the reflog entry to determine previous branch
     local reflog_entry
     reflog_entry=$(git reflog -1 --format='%gs' 2>/dev/null || echo "")
     
     if [[ "$reflog_entry" =~ checkout:\ moving\ from\ ([^\ ]+)\ to\ $current_branch ]]; then
         prev_branch="${BASH_REMATCH[1]}"
         
-        # Check if current branch existed before this checkout
-        if ! git show-ref --verify --quiet "refs/heads/${current_branch}@{1}" 2>/dev/null; then
+        # Check if this branch was just created by examining its reflog
+        # A newly created branch will have "branch: Created from" as its first reflog entry
+        local branch_reflog
+        branch_reflog=$(git reflog show "$current_branch" -1 --format='%gs' 2>/dev/null || echo "")
+        
+        if [[ "$branch_reflog" =~ ^branch:\ Created\ from ]]; then
             is_new_branch=true
             log_to_file "INFO" "$HOOK_NAME" "New branch created: $current_branch from $prev_branch"
             
