@@ -613,20 +613,27 @@ get_merge_source_branch() {
     # "Merge branch 'feature-PROJ-123-something' into develop"
     # "Merge hotfix-PROJ-456-fix to main"
     # "Merge hotfix-PROJ-456-fix into main"
+    # "Merge release-1.2.0 to main"
+    # "Merge pull request #123 from feature-ABC-456-branch"
     
     local source_branch=""
     
-    # Pattern 1: Merge branch 'branch-name'
+    # Pattern 1: Merge branch 'branch-name' (Git's default with quotes)
     if [[ "$merge_msg" =~ Merge[[:space:]]+branch[[:space:]]+[\'\"]([^\'\"]+)[\'\"] ]]; then
         source_branch="${BASH_REMATCH[1]}"
-    # Pattern 2: Merge branch-name (no quotes)
-    elif [[ "$merge_msg" =~ Merge[[:space:]]+([a-zA-Z0-9_/-]+)[[:space:]]+(into|to) ]]; then
+    # Pattern 2: Merge branch-name (no quotes) - supports dots for release branches
+    elif [[ "$merge_msg" =~ Merge[[:space:]]+([a-zA-Z0-9._/-]+)[[:space:]]+(into|to) ]]; then
         source_branch="${BASH_REMATCH[1]}"
     # Pattern 3: Merge remote-tracking branch
     elif [[ "$merge_msg" =~ Merge[[:space:]]+remote-tracking[[:space:]]+branch[[:space:]]+[\'\"]([^\'\"]+)[\'\"] ]]; then
         source_branch="${BASH_REMATCH[1]}"
         # Remove refs/remotes/origin/ prefix if present
         source_branch="${source_branch#refs/remotes/origin/}"
+    # Pattern 4: Pull request merges (GitHub/GitLab/Bitbucket)
+    elif [[ "$merge_msg" =~ Merge[[:space:]]+pull[[:space:]]+request[[:space:]]+#[0-9]+[[:space:]]+from[[:space:]]+([a-zA-Z0-9._/-]+) ]]; then
+        source_branch="${BASH_REMATCH[1]}"
+        # Remove username prefix if present (e.g., "username/branch" -> "branch")
+        source_branch="${source_branch#*/}"
     fi
     
     if [[ -n "$source_branch" ]]; then
