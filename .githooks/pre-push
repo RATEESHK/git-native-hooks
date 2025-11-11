@@ -596,9 +596,28 @@ main() {
             continue
         fi
         
-        # Extract branch name
+        # CRITICAL: Distinguish between branches and tags
+        # Git Flow allows tags on master/main after merging release/hotfix branches
+        # Tags are NOT branches and should not be validated against branch naming rules
+        if [[ "$remote_ref" == refs/tags/* ]]; then
+            # This is a tag push - skip all branch validations
+            local tag_name="${remote_ref#refs/tags/}"
+            log_to_file "INFO" "$HOOK_NAME" "Skipping validation for tag: $tag_name (tags are allowed)"
+            print_info "Tag push detected: $tag_name (skipping branch validations)"
+            continue
+        fi
+        
+        # Extract branch name (only for refs/heads/*)
         local branch="${remote_ref#refs/heads/}"
         local branch_sha="$local_sha"
+        
+        # Verify this is actually a branch ref
+        if [[ "$remote_ref" != refs/heads/* ]]; then
+            # Unknown ref type - log and skip
+            log_to_file "WARNING" "$HOOK_NAME" "Unknown ref type: $remote_ref (not a branch or tag)"
+            print_warning "Unknown ref type: $remote_ref (skipping validations)"
+            continue
+        fi
         
         log_to_file "INFO" "$HOOK_NAME" "Processing push: $branch ($local_sha)"
         

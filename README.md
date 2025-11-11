@@ -2363,7 +2363,7 @@ git show v1.0.0                  # Show tag details
 
 # Create tags
 git tag v1.0.0                   # Lightweight tag
-git tag -a v1.0.0 -m "Release 1.0.0"  # Annotated tag
+git tag -a v1.0.0 -m "Release 1.0.0"  # Annotated tag (recommended)
 
 # Push tags
 git push origin v1.0.0           # Push specific tag
@@ -2373,6 +2373,59 @@ git push origin --tags           # Push all tags
 git tag -d v1.0.0                # Delete local
 git push origin --delete v1.0.0  # Delete remote
 ```
+
+**Important: Tags and Git Flow Compliance**
+
+Tags are **automatically allowed** by the pre-push hook and do not require branch naming validation:
+
+```bash
+# ✅ This works - tags bypass branch validation
+git checkout main
+git tag -a v1.2.0 -m "Release version 1.2.0"
+git push origin main
+git push origin v1.2.0           # Tag push is allowed
+
+# ✅ Push multiple tags at once
+git push origin --tags           # All tags are allowed
+
+# ✅ Tag naming is flexible (not restricted to branch patterns)
+git tag -a v1.0.0-rc1 -m "Release candidate"
+git tag -a 2024.11.11 -m "Date-based version"
+git tag -a production-stable -m "Production marker"
+```
+
+**Git Flow Tagging Best Practices** (per official model):
+
+1. **Release Tags**: Created on `main` after merging release branch
+   ```bash
+   git checkout main
+   git merge --no-ff release-1.2.0
+   git tag -a v1.2.0 -m "Release version 1.2.0"  # Tag on main
+   git push origin main
+   git push origin v1.2.0
+   ```
+
+2. **Hotfix Tags**: Created on `main` after merging hotfix branch
+   ```bash
+   git checkout main
+   git merge --no-ff hotfix-1.2.1
+   git tag -a v1.2.1 -m "Hotfix version 1.2.1"  # Tag on main
+   git push origin main
+   git push origin v1.2.1
+   ```
+
+3. **Why Tags Are Special**:
+   - Tags mark specific points in history (releases, milestones)
+   - Tags are NOT branches - they're immutable references to commits
+   - Tags don't need JIRA IDs or branch naming patterns
+   - Tags are part of Git Flow release process (tag after merging to main)
+
+**Tag Recommendations**:
+- Use annotated tags (`-a` flag) for releases - includes metadata
+- Follow semantic versioning: `v1.2.3` (major.minor.patch)
+- Include descriptive messages explaining the release
+- Tag on `main` branch only (after merging release/hotfix)
+- Sign tags with GPG for security: `git tag -s v1.0.0`
 
 #### Reset Operations
 
@@ -7549,6 +7602,13 @@ Fix now:
 5. **Linear History**: No merge commits allowed
 6. **Foxtrot Merges**: Detects and blocks incorrect merge patterns
 
+**Special Handling**:
+- **Tags** (`refs/tags/*`): Automatically bypass all branch validations
+  - Tags are immutable commit markers used for releases
+  - Git Flow requires tags on `main` after release/hotfix merges
+  - No branch naming, commit count, or history validations applied
+  - Example: `git push origin v1.0.0` - allowed without validation
+
 **Example Output**:
 ```
 ================================================================================
@@ -9206,6 +9266,102 @@ git branch -D feat-PROJ-123-another
 git add <files>
 git commit -m "fix: PROJ-999 additional fix"
 ```
+
+#### 9. Tag Push Operations (Git Flow Releases)
+
+**Scenario**: Pushing version tags after release/hotfix merges
+
+**Important**: Tags are **NOT validated** as branches - they are allowed automatically!
+
+```bash
+# ✅ CORRECT: Push tags after merging to main
+git checkout main
+git merge --no-ff release-1.2.0
+git tag -a v1.2.0 -m "Release version 1.2.0"
+git push origin main
+git push origin v1.2.0  # Tag push is automatically allowed
+
+# ✅ Push multiple tags
+git push origin --tags  # All tags are allowed
+
+# ✅ Any tag naming format works
+git tag -a v1.0.0-rc1 -m "Release candidate"
+git push origin v1.0.0-rc1  # Allowed
+```
+
+**Why Tags Are Special**:
+
+Tags represent releases and milestones in Git Flow, not development branches:
+- Created on `main` after merging release/hotfix branches
+- Mark production-ready versions
+- Don't require JIRA IDs or branch naming patterns
+- Immutable references to specific commits
+- Part of official Git Flow release process
+
+**Common Tag Operations**:
+
+```bash
+# List all tags
+git tag
+git tag -l "v1.*"  # Filter tags
+
+# Create annotated tag (recommended for releases)
+git tag -a v1.0.0 -m "Release version 1.0.0"
+
+# Create signed tag (for security)
+git tag -s v1.0.0 -m "Release version 1.0.0"
+
+# Push specific tag
+git push origin v1.0.0
+
+# Push all tags
+git push origin --tags
+
+# Delete tag (if needed)
+git tag -d v1.0.0           # Delete local
+git push origin --delete v1.0.0  # Delete remote
+```
+
+**Git Flow Release Process with Tags**:
+
+```bash
+# Complete release workflow
+git checkout develop
+git checkout -b release-1.2.0 develop
+# ... make release preparations, bump version ...
+git commit -m "Bump version to 1.2.0"
+
+# Merge to main
+git checkout main
+git merge --no-ff release-1.2.0
+git tag -a v1.2.0 -m "Release version 1.2.0"
+git push origin main
+git push origin v1.2.0  # ✅ Tag push works without validation
+
+# Merge back to develop
+git checkout develop
+git merge --no-ff release-1.2.0
+git push origin develop
+
+# Delete release branch
+git branch -d release-1.2.0
+git push origin --delete release-1.2.0
+```
+
+**Previous Issue (Now Fixed)**:
+
+Before fix, pushing tags would fail with:
+```
+❌ Error: Branch 'refs/tags/v1.0.0' doesn't follow Git Flow naming
+```
+
+This was incorrect behavior - tags should never be validated as branches.
+
+**Current Behavior (After Fix)**:
+
+Pre-push hook now properly distinguishes between:
+- `refs/heads/*` → Validated as branches (naming, Git Flow rules)
+- `refs/tags/*` → Allowed automatically (no branch validation)
 
 ### Universal Undo Commands
 
