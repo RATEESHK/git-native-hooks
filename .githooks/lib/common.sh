@@ -588,6 +588,150 @@ validate_branch_origin() {
     return 0
 }
 
+# Get the source branch name from a merge commit
+# Returns the branch name that was merged, or empty string if not a merge
+get_merge_source_branch() {
+    local commit_sha="$1"
+    
+    # Check if this is a merge commit (has 2 or more parents)
+    if ! git rev-parse --verify "${commit_sha}^2" >/dev/null 2>&1; then
+        return 1  # Not a merge commit
+    fi
+    
+    # Get merge commit message
+    local merge_msg
+    merge_msg=$(git log --format=%B -n 1 "$commit_sha" 2>/dev/null || echo "")
+    
+    if [[ -z "$merge_msg" ]]; then
+        return 1
+    fi
+    
+    # Extract source branch from merge message
+    # Common patterns:
+    # "Merge branch 'feature-PROJ-123-something'"
+    # "Merge branch 'feature-PROJ-123-something' into develop"
+    # "Merge hotfix-PROJ-456-fix to main"
+    # "Merge hotfix-PROJ-456-fix into main"
+    
+    local source_branch=""
+    
+    # Pattern 1: Merge branch 'branch-name'
+    if [[ "$merge_msg" =~ Merge[[:space:]]+branch[[:space:]]+[\'\"]([^\'\"]+)[\'\"] ]]; then
+        source_branch="${BASH_REMATCH[1]}"
+    # Pattern 2: Merge branch-name (no quotes)
+    elif [[ "$merge_msg" =~ Merge[[:space:]]+([a-zA-Z0-9_/-]+)[[:space:]]+(into|to) ]]; then
+        source_branch="${BASH_REMATCH[1]}"
+    # Pattern 3: Merge remote-tracking branch
+    elif [[ "$merge_msg" =~ Merge[[:space:]]+remote-tracking[[:space:]]+branch[[:space:]]+[\'\"]([^\'\"]+)[\'\"] ]]; then
+        source_branch="${BASH_REMATCH[1]}"
+        # Remove refs/remotes/origin/ prefix if present
+        source_branch="${source_branch#refs/remotes/origin/}"
+    fi
+    
+    if [[ -n "$source_branch" ]]; then
+        echo "$source_branch"
+        return 0
+    fi
+    
+    return 1
+}
+
+# Check if a commit is a Git Flow merge
+# A Git Flow merge is a merge commit where:
+# - Source and target branches follow Git Flow rules
+# - Feature/bugfix/support → develop
+# - Release → main AND develop
+# - Hotfix → main AND develop
+is_gitflow_merge() {
+    local target_branch="$1"
+    local commit_sha="$2"
+    
+    # Check if this is a merge commit
+    if ! git rev-parse --verify "${commit_sha}^2" >/dev/null 2>&1; then
+        return 1  # Not a merge commit
+    fi
+    
+    # Get source branch
+    local source_branch
+    if ! source_branch=$(get_merge_source_branch "$commit_sha"); then
+        return 1  # Couldn't determine source branch
+    fi
+    
+    # Get branch types
+    local source_type
+    source_type=$(get_branch_type "$source_branch")
+    
+    local target_type
+    target_type=$(get_branch_type "$target_branch")
+    
+    # Validate Git Flow merge rules
+    case "$target_type" in
+        main)
+            # Main can receive merges from:
+            # - release branches (final release merge)
+            # - hotfix branches (production fixes)
+            if [[ "$source_type" == "release" ]] || [[ "$source_type" == "hotfix" ]]; then
+                return 0  # Valid Git Flow merge
+            fi
+            ;;
+        develop)
+            # Develop can receive merges from:
+            # - feature branches (new features)
+            # - bugfix branches (bug fixes)
+            # - support branches (chores, docs, etc.)
+            # - release branches (back-merge after release)
+            # - hotfix branches (back-merge after hotfix)
+            if [[ "$source_type" == "feature" ]] || \
+               [[ "$source_type" == "bugfix" ]] || \
+               [[ "$source_type" == "support" ]] || \
+               [[ "$source_type" == "release" ]] || \
+               [[ "$source_type" == "hotfix" ]]; then
+                return 0  # Valid Git Flow merge
+            fi
+            ;;
+    esac
+    
+    return 1  # Not a valid Git Flow merge
+}
+
+# Validate if a merge from source branch to target branch is allowed per Git Flow
+validate_merge_destination() {
+    local source_branch="$1"
+    local target_branch="$2"
+    
+    local source_type
+    source_type=$(get_branch_type "$source_branch")
+    
+    local target_type
+    target_type=$(get_branch_type "$target_branch")
+    
+    # Git Flow merge rules:
+    # Features/bugfix/support → develop ONLY
+    # Release → main AND develop
+    # Hotfix → main AND develop
+    
+    case "$source_type" in
+        feature|bugfix|support)
+            # Can only merge to develop
+            if [[ "$target_type" == "develop" ]]; then
+                return 0
+            fi
+            return 1
+            ;;
+        release|hotfix)
+            # Can merge to both main and develop
+            if [[ "$target_type" == "main" ]] || [[ "$target_type" == "develop" ]]; then
+                return 0
+            fi
+            return 1
+            ;;
+        *)
+            # Unknown source type - be permissive
+            return 0
+            ;;
+    esac
+}
+
 # Get allowed base branches for a branch type
 get_allowed_bases() {
     local branch="$1"

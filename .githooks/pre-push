@@ -375,14 +375,92 @@ validate_commit_count() {
     
     log_to_file "INFO" "$HOOK_NAME" "Validating commit count for: $branch (SHA: $branch_sha)"
     
-    # Skip for long-lived branches
     local branch_type
     branch_type="$(get_branch_type "$branch")"
-    if [[ "$branch_type" == "main" ]] || [[ "$branch_type" == "develop" ]] || [[ "$branch_type" == "release" ]]; then
+    
+    # For main/develop branches: Check if this is a Git Flow merge
+    if [[ "$branch_type" == "main" ]] || [[ "$branch_type" == "develop" ]]; then
+        # Check if the latest commit is a merge commit
+        if git rev-parse --verify "${branch_sha}^2" >/dev/null 2>&1; then
+            # This is a merge commit - check if it's a Git Flow merge
+            if is_gitflow_merge "$branch" "$branch_sha"; then
+                log_to_file "INFO" "$HOOK_NAME" "Git Flow merge detected to $branch - skipping commit count"
+                return 0  # Git Flow merges are allowed regardless of commit count
+            else
+                # This is a merge but NOT a Git Flow merge - should be blocked
+                local source_branch
+                if source_branch=$(get_merge_source_branch "$branch_sha"); then
+                    local error_details="Non-Git-Flow merge detected: $source_branch → $branch"
+                    local suggestions=()
+                    
+                    local source_type
+                    source_type=$(get_branch_type "$source_branch")
+                    
+                    suggestions+=("Git Flow Violation: Invalid merge destination")
+                    suggestions+=("")
+                    
+                    if [[ "$branch" == "main" ]]; then
+                        suggestions+=("⛔ BLOCKED: Only release and hotfix branches can merge to main")
+                        suggestions+=("")
+                        suggestions+=("Detected:")
+                        suggestions+=("  Source: $source_branch (type: $source_type)")
+                        suggestions+=("  Target: main")
+                        suggestions+=("")
+                        suggestions+=("Git Flow rules for main:")
+                        suggestions+=("  ✓ release-* → main (production releases)")
+                        suggestions+=("  ✓ hotfix-* → main (emergency fixes)")
+                        suggestions+=("  ✗ feature-* → main (NOT ALLOWED)")
+                        suggestions+=("  ✗ bugfix-* → main (NOT ALLOWED)")
+                        suggestions+=("")
+                        if [[ "$source_type" == "feature" ]] || [[ "$source_type" == "bugfix" ]] || [[ "$source_type" == "support" ]]; then
+                            suggestions+=("Correct workflow:")
+                            suggestions+=("  1. Merge to develop first:")
+                            suggestions+=("     git checkout develop")
+                            suggestions+=("     git merge --no-ff $source_branch")
+                            suggestions+=("     git push origin develop")
+                            suggestions+=("  2. Create release when ready:")
+                            suggestions+=("     git checkout -b release-X.Y.Z develop")
+                            suggestions+=("     # Test, bump version, etc.")
+                            suggestions+=("     git checkout main")
+                            suggestions+=("     git merge --no-ff release-X.Y.Z")
+                            suggestions+=("     git push origin main")
+                        fi
+                    else  # develop
+                        suggestions+=("⚠️  WARNING: Unusual merge to develop from: $source_branch")
+                        suggestions+=("")
+                        suggestions+=("Detected:")
+                        suggestions+=("  Source: $source_branch (type: $source_type)")
+                        suggestions+=("  Target: develop")
+                        suggestions+=("")
+                        suggestions+=("This might be valid, but verify it follows your workflow.")
+                    fi
+                    
+                    suggestions+=("")
+                    suggestions+=("To undo this merge:")
+                    suggestions+=("  git reset --hard HEAD~1  # Undo merge commit")
+                    suggestions+=("  git log --oneline -5     # Verify merge is gone")
+                    
+                    report_error "$HOOK_NAME" "Invalid Git Flow Merge" "$error_details" "${suggestions[@]}"
+                    return 1
+                fi
+                # Couldn't determine source - allow but log warning
+                log_to_file "WARNING" "$HOOK_NAME" "Merge commit to $branch but couldn't determine source"
+                return 0
+            fi
+        fi
+        # Not a merge commit - for protected branches, this should have been blocked earlier
+        # But if we get here, allow it (might be initial setup or tag push)
         return 0
     fi
     
-    # Get max commits configuration
+    # For release branches, skip commit count validation
+    # Release branches can have multiple commits (bug fixes, version bumps, etc.)
+    if [[ "$branch_type" == "release" ]]; then
+        log_to_file "INFO" "$HOOK_NAME" "Release branch - skipping commit count validation"
+        return 0
+    fi
+    
+    # For feature/bugfix/hotfix/support branches: Validate commit count
     local max_commits
     max_commits=$(get_max_commits)
     
@@ -650,25 +728,148 @@ main() {
             print_success "Branch base: $base_branch (correct)"
         fi
         
-        # 4. Commit count validation (use branch_sha instead of HEAD)
+        # 4. Validate merge destination for Git Flow merges
+        # Check if we're pushing a merge commit and validate it's going to the right place
+        if git rev-parse --verify "${branch_sha}^2" >/dev/null 2>&1; then
+            # This is a merge commit - get the source branch
+            local merge_source_check
+            if merge_source_check=$(get_merge_source_branch "$branch_sha"); then
+                # Validate the merge destination
+                if ! validate_merge_destination "$merge_source_check" "$branch"; then
+                    local source_type_check
+                    source_type_check=$(get_branch_type "$merge_source_check")
+                    
+                    local error_details="Invalid merge destination: $merge_source_check ($source_type_check) → $branch"
+                    local suggestions=()
+                    
+                    suggestions+=("⛔ Git Flow Violation: Merge to Wrong Target Branch")
+                    suggestions+=("")
+                    suggestions+=("Detected merge:")
+                    suggestions+=("  Source: $merge_source_check (type: $source_type_check)")
+                    suggestions+=("  Target: $branch")
+                    suggestions+=("")
+                    
+                    case "$source_type_check" in
+                        feature|bugfix|support)
+                            suggestions+=("Git Flow rule: Features/bugfixes can ONLY merge to 'develop'")
+                            suggestions+=("")
+                            suggestions+=("  ✓ Allowed: $merge_source_check → develop")
+                            suggestions+=("  ✗ Blocked: $merge_source_check → main")
+                            suggestions+=("")
+                            if [[ "$branch" == "main" ]]; then
+                                suggestions+=("You attempted to merge to main, which violates Git Flow.")
+                                suggestions+=("")
+                                suggestions+=("Correct workflow:")
+                                suggestions+=("  1. Undo this merge:")
+                                suggestions+=("     git reset --hard HEAD~1")
+                                suggestions+=("  2. Merge to develop instead:")
+                                suggestions+=("     git checkout develop")
+                                suggestions+=("     git merge --no-ff $merge_source_check")
+                                suggestions+=("     git push origin develop")
+                                suggestions+=("  3. When ready for production:")
+                                suggestions+=("     git checkout -b release-X.Y.Z develop")
+                                suggestions+=("     # test and prepare release")
+                                suggestions+=("     git checkout main")
+                                suggestions+=("     git merge --no-ff release-X.Y.Z")
+                                suggestions+=("     git tag -a vX.Y.Z -m \"Release vX.Y.Z\"")
+                                suggestions+=("     git push origin main --tags")
+                            fi
+                            ;;
+                        release|hotfix)
+                            suggestions+=("Git Flow rule: Release/hotfix branches can merge to 'main' AND 'develop'")
+                            suggestions+=("")
+                            suggestions+=("  ✓ Allowed: $merge_source_check → main")
+                            suggestions+=("  ✓ Allowed: $merge_source_check → develop")
+                            suggestions+=("")
+                            suggestions+=("This merge appears valid for Git Flow.")
+                            suggestions+=("If you're seeing this error, please report as a bug.")
+                            ;;
+                        *)
+                            suggestions+=("Unknown branch type: $source_type_check")
+                            suggestions+=("Unable to validate Git Flow compliance.")
+                            suggestions+=("")
+                            suggestions+=("Please ensure your branch follows Git Flow naming:")
+                            suggestions+=("  • feat-JIRA-123-description (features)")
+                            suggestions+=("  • fix-JIRA-123-description (bugfixes)")
+                            suggestions+=("  • hotfix-JIRA-123-description (hotfixes)")
+                            suggestions+=("  • release-X.Y.Z (releases)")
+                            ;;
+                    esac
+                    
+                    suggestions+=("")
+                    suggestions+=("📖 Learn more: https://nvie.com/posts/a-successful-git-branching-model/")
+                    
+                    report_error "$HOOK_NAME" "Invalid Merge Destination" "$error_details" "${suggestions[@]}"
+                    validation_failed=1
+                    break
+                fi
+            fi
+        fi
+        
+        # 6. Check if this is a Git Flow merge (for main/develop branches)
+        local branch_type
+        branch_type=$(get_branch_type "$branch")
+        local is_merge_commit=false
+        local is_gitflow_merge_detected=false
+        local merge_source=""
+        
+        if [[ "$branch_type" == "main" ]] || [[ "$branch_type" == "develop" ]]; then
+            # Check if latest commit is a merge
+            if git rev-parse --verify "${branch_sha}^2" >/dev/null 2>&1; then
+                is_merge_commit=true
+                
+                # Check if it's a Git Flow merge
+                if is_gitflow_merge "$branch" "$branch_sha"; then
+                    is_gitflow_merge_detected=true
+                    
+                    # Get source branch for display
+                    if merge_source=$(get_merge_source_branch "$branch_sha"); then
+                        log_to_file "INFO" "$HOOK_NAME" "Git Flow merge detected: $merge_source → $branch"
+                    fi
+                fi
+            fi
+        fi
+        
+        # 7. Commit count validation (use branch_sha instead of HEAD)
         if ! validate_commit_count "$branch" "$base_branch" "$remote" "$branch_sha"; then
             validation_failed=1
             break
         fi
-        local commit_count
-        if [[ -n "$base_branch" ]] && git rev-parse --verify "$base_branch" >/dev/null 2>&1; then
-            commit_count=$(git rev-list --count "${base_branch}..${branch_sha}" 2>/dev/null || echo "0")
-        else
-            commit_count=$(git rev-list --count "$branch_sha" 2>/dev/null || echo "0")
-        fi
-        print_success "Commit count: $commit_count/$(get_max_commits)"
         
-        # 5. Linear history validation (use branch_sha instead of HEAD)
-        if ! validate_linear_history "$branch" "$base_branch" "$branch_sha"; then
-            validation_failed=1
-            break
+        # Display appropriate success message based on merge detection
+        if [[ "$is_gitflow_merge_detected" == "true" ]]; then
+            if [[ -n "$merge_source" ]]; then
+                print_success "Git Flow merge detected: $merge_source → $branch (allowed)"
+            else
+                print_success "Git Flow merge detected (allowed)"
+            fi
+        else
+            local commit_count
+            if [[ -n "$base_branch" ]] && git rev-parse --verify "$base_branch" >/dev/null 2>&1; then
+                commit_count=$(git rev-list --count "${base_branch}..${branch_sha}" 2>/dev/null || echo "0")
+            else
+                commit_count=$(git rev-list --count "$branch_sha" 2>/dev/null || echo "0")
+            fi
+            
+            # For release branches, show commit count without limit
+            if [[ "$branch_type" == "release" ]]; then
+                print_success "Commit count: $commit_count (release branch - no limit)"
+            else
+                print_success "Commit count: $commit_count/$(get_max_commits)"
+            fi
         fi
-        print_success "History: Linear (no merge commits)"
+        
+        # 8. Linear history validation (use branch_sha instead of HEAD)
+        # Skip for main/develop if this is a Git Flow merge (merges are expected)
+        if [[ "$is_gitflow_merge_detected" == "true" ]]; then
+            log_to_file "INFO" "$HOOK_NAME" "Skipping linear history check for Git Flow merge"
+        else
+            if ! validate_linear_history "$branch" "$base_branch" "$branch_sha"; then
+                validation_failed=1
+                break
+            fi
+            print_success "History: Linear (no merge commits)"
+        fi
         
         echo ""
     done
@@ -688,6 +889,20 @@ main() {
     log_to_file "INFO" "$HOOK_NAME" "Push validation successful"
     print_success "All validations passed - push allowed"
     echo ""
+    
+    # Note: If push fails after this point, it's a remote rejection (not local hook)
+    # Common reasons for remote rejection:
+    # 1. Branch protection rules on GitHub/GitLab
+    # 2. Required status checks not passing
+    # 3. Outdated local branch (remote has new commits)
+    # 4. Insufficient permissions
+    #
+    # If you see "error: failed to push some refs" AFTER this message,
+    # run these commands to diagnose:
+    #   git fetch origin
+    #   git status
+    #   git log origin/<branch>..<branch>  # Check what you're trying to push
+    #   git log <branch>..origin/<branch>  # Check what remote has that you don't
     
     exit 0
 }
