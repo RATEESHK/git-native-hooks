@@ -15,6 +15,7 @@ A comprehensive, production-ready Git hooks system that enforces Git Flow branch
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [Git Flow Quick Reference Card](#git-flow-quick-reference-card)
 - [Initial Repository Setup & First-Time Configuration](#initial-repository-setup--first-time-configuration)
   - [Scenario 1: Brand New Local Repository (git init)](#scenario-1-brand-new-local-repository-git-init)
   - [Scenario 2: Repository Created on Remote (Clone & Setup)](#scenario-2-repository-created-on-remote-clone--setup)
@@ -265,6 +266,103 @@ git commit -m "fix: PROJ-456 patch XSS vulnerability"
 # Push
 git push origin hotfix-PROJ-456-security-patch
 ```
+
+---
+
+## Git Flow Quick Reference Card
+
+**⚡ Fast access to critical Git Flow workflows**
+
+### 📋 Feature Workflow (95% of your work)
+
+```bash
+# 1. Start feature from develop
+git checkout develop && git pull
+git checkout -b feat-JIRA-123-description develop
+
+# 2. Work and commit
+git add . && git commit -m "feat: JIRA-123 description"
+
+# 3. Push and create PR to develop
+git push -u origin feat-JIRA-123-description
+```
+
+### 🚀 Release Workflow
+
+```bash
+# 1. Create release from develop
+git checkout develop && git pull
+git checkout -b release-1.2.0 develop
+
+# 2. Bump version & update changelog
+sed -i 's/"version": "1.1.0"/"version": "1.2.0"/' package.json
+git add . && git commit -m "chore: bump version to 1.2.0"
+
+# 3. Merge to main (production)
+git checkout main && git pull
+git merge --no-ff release-1.2.0 -m "Merge release-1.2.0"
+git tag -a v1.2.0 -m "Release version 1.2.0"
+git push origin main --tags
+
+# 4. ⚠️ CRITICAL: Merge back to develop
+git checkout develop && git pull
+git merge --no-ff release-1.2.0 -m "Merge release-1.2.0 into develop"
+git push origin develop
+
+# 5. Cleanup
+git branch -d release-1.2.0
+git push origin --delete release-1.2.0
+```
+
+### 🔥 Hotfix Workflow (PRODUCTION EMERGENCY)
+
+```bash
+# 1. Create hotfix from main (production)
+git checkout main && git pull
+git checkout -b hotfix-JIRA-999-critical-fix main
+
+# 2. Fix bug and bump patch version
+# Make your fix
+git add . && git commit -m "fix: JIRA-999 patch critical vulnerability"
+sed -i 's/"version": "1.2.0"/"version": "1.2.1"/' package.json
+git add . && git commit -m "chore: bump version to 1.2.1"
+
+# 3. Merge to main (deploy to production)
+git checkout main && git pull
+git merge --no-ff hotfix-JIRA-999-critical-fix -m "Merge hotfix-JIRA-999-critical-fix"
+git tag -a v1.2.1 -m "Hotfix release 1.2.1"
+git push origin main --tags
+
+# 4. ⚠️ CRITICAL: Merge to develop (keep develop in sync!)
+git checkout develop && git pull
+git merge --no-ff hotfix-JIRA-999-critical-fix -m "Merge hotfix-JIRA-999-critical-fix into develop"
+git push origin develop
+
+# 5. Cleanup
+git branch -d hotfix-JIRA-999-critical-fix
+git push origin --delete hotfix-JIRA-999-critical-fix
+```
+
+**⚠️ CRITICAL Git Flow Rules:**
+
+| Branch Type | Created FROM | Merges TO | Why Both? |
+|-------------|--------------|-----------|-----------|
+| **Feature** | `develop` | `develop` | Features go to next release |
+| **Bugfix** | `develop` | `develop` | Fixes go to next release |
+| **Release** | `develop` | `main` + `develop` | ✅ Main = production<br>✅ Develop = keep in sync |
+| **Hotfix** | `main` | `main` + `develop` | ✅ Main = fix production NOW<br>✅ Develop = prevent regression |
+
+**🎯 Key Takeaways:**
+- ✅ **Features** → Only to `develop` (one merge)
+- ✅ **Releases** → To BOTH `main` AND `develop` (two merges!)
+- ✅ **Hotfixes** → To BOTH `main` AND `develop` (two merges!)
+- ⚠️ **Forgetting develop merge** = Bug returns in next release!
+
+**📚 Detailed Guides:**
+- [Complete Feature Workflow](#complete-feature-development-workflow) - Step-by-step with examples
+- [Complete Release Workflow](#complete-release-workflow) - QA, testing, rollback
+- [Complete Hotfix Workflow](#complete-hotfix-workflow) - Emergency procedures
+- [Git Flow Automation](#git-flow-automation) - GitHub Actions, GitLab CI
 
 ---
 
@@ -2934,6 +3032,8 @@ git push origin --delete feat-PROJ-123-user-authentication
 
 ### Complete Release Workflow
 
+**🚀 CRITICAL: Release branches MUST merge to BOTH `main` AND `develop`**
+
 **Scenario**: Version 1.2.0 is ready for production release.
 
 #### Step 1: Create Release Branch
@@ -3073,6 +3173,8 @@ git show v1.2.0
 
 ### Complete Hotfix Workflow
 
+**🔥 CRITICAL: Hotfix branches MUST merge to BOTH `main` AND `develop`**
+
 **Scenario**: Critical security vulnerability discovered in production (v1.2.0).
 
 #### Step 1: Create Hotfix Branch
@@ -3136,10 +3238,10 @@ git add package.json
 git commit -m "chore: PROJ-999 bump version to 1.2.1"
 ```
 
-#### Step 4: Finish Hotfix - Merge to Main
+#### Step 4: Finish Hotfix - Merge to Main (Production Deploy)
 
 ```bash
-# Merge to main
+# Merge to main (fixes production NOW)
 git checkout main
 git pull origin main
 git merge --no-ff hotfix-PROJ-999-security-xss -m "Merge hotfix-PROJ-999-security-xss"
@@ -3156,10 +3258,12 @@ git push origin main
 git push origin v1.2.1
 ```
 
-#### Step 5: Finish Hotfix - Merge to Develop
+#### Step 5: ⚠️ CRITICAL - Merge to Develop (Prevent Regression!)
+
+**⚠️ DO NOT SKIP THIS STEP!** If you don't merge to develop, the bug will return in the next release!
 
 ```bash
-# Important: Merge to develop so fix is in next release
+# CRITICAL: Merge to develop so fix is in next release
 git checkout develop
 git pull origin develop
 git merge --no-ff hotfix-PROJ-999-security-xss -m "Merge hotfix-PROJ-999-security-xss into develop"
